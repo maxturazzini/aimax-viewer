@@ -1,0 +1,1369 @@
+import * as vscode from 'vscode';
+import * as fs from 'fs';
+import * as path from 'path';
+import * as http from 'http';
+import { parseMarkdown, wrapMarkdownHtml } from './markdown-parser';
+import { ArtifactsTreeProvider, ArtifactItem, FolderConfig } from './treeview-provider';
+
+let browserPanel: vscode.WebviewPanel | undefined;
+let homePanel: vscode.WebviewPanel | undefined;
+let httpServer: http.Server | undefined;
+let serverPort = 3124;
+let extensionContext: vscode.ExtensionContext;
+let treeProvider: ArtifactsTreeProvider | undefined;
+
+// Track current viewer state
+let currentViewerState: {
+    url: string;
+    title: string;
+    panel: 'browser' | 'home';
+    timestamp: string;
+} | undefined;
+
+function getCurrentViewerState() {
+    return currentViewerState;
+}
+
+function updateViewerState(url: string, title: string, panel: 'browser' | 'home') {
+    currentViewerState = {
+        url,
+        title,
+        panel,
+        timestamp: new Date().toISOString()
+    };
+}
+
+// Settings
+function getConfig() {
+    const config = vscode.workspace.getConfiguration('aimaxViewer');
+    return {
+        serverPort: config.get<number>('server.port', 3124),
+        startupMode: config.get<string>('startup.mode', 'home'),
+        homePage: config.get<string>('startup.homePage', 'projects/Artifacts/index.html'),
+        consoleOpenByDefault: config.get<boolean>('console.openByDefault', false),
+        enableJavaScript: config.get<boolean>('webview.enableJavaScript', true),
+        multiTab: config.get<boolean>('panels.multiTab', true),
+        cspMode: config.get<string>('csp.mode', 'permissive'),
+        cspAllowedDomains: config.get<string[]>('csp.allowedDomains', [
+            'fonts.googleapis.com',
+            'fonts.gstatic.com',
+            'cdn.jsdelivr.net',
+            'cdnjs.cloudflare.com',
+            'unpkg.com'
+        ]),
+        browserLayout: config.get<string>('browser.layout', 'sidebar'),
+        browserFolders: config.get<FolderConfig[]>('browser.folders', [
+            { label: 'Artifacts', path: 'projects/Artifacts' }
+        ])
+    };
+}
+
+// Generate CSP meta tag based on settings
+function generateCSP(): string {
+    const config = getConfig();
+
+    if (config.cspMode === 'strict') {
+        // Strict mode: only localhost
+        return `default-src 'self' http://127.0.0.1:* http://localhost:*; script-src 'self' 'unsafe-inline' http://127.0.0.1:* http://localhost:*; style-src 'self' 'unsafe-inline' http://127.0.0.1:* http://localhost:*; img-src 'self' data: http://127.0.0.1:* http://localhost:*; font-src 'self' data: http://127.0.0.1:* http://localhost:*;`;
+    }
+
+    // Permissive or custom mode
+    const domains = config.cspAllowedDomains;
+    const httpsScheme = domains.map(d => `https://${d}`).join(' ');
+
+    return `default-src 'self' http://127.0.0.1:* http://localhost:*; script-src 'self' 'unsafe-inline' http://127.0.0.1:* http://localhost:* ${httpsScheme}; style-src 'self' 'unsafe-inline' http://127.0.0.1:* http://localhost:* ${httpsScheme}; img-src 'self' data: http://127.0.0.1:* http://localhost:* ${httpsScheme}; font-src 'self' data: http://127.0.0.1:* http://localhost:* ${httpsScheme}; connect-src 'self' http://127.0.0.1:* http://localhost:* ${httpsScheme};`;
+}
+
+// Find workspace root by looking for projects/Artifacts directory
+function findWorkspaceRoot(startPath: string): string | undefined {
+    let currentPath = startPath;
+    const maxLevels = 10; // Safety limit
+
+    for (let i = 0; i < maxLevels; i++) {
+        const artifactsPath = path.join(currentPath, 'projects', 'Artifacts');
+        if (fs.existsSync(artifactsPath)) {
+            console.log('[AIMax] Found workspace root at:', currentPath);
+            return currentPath;
+        }
+        const parentPath = path.dirname(currentPath);
+        if (parentPath === currentPath) {
+            // Reached filesystem root
+            break;
+        }
+        currentPath = parentPath;
+    }
+    console.log('[AIMax] Could not find workspace root from:', startPath);
+    return undefined;
+}
+
+export function activate(context: vscode.ExtensionContext) {
+    extensionContext = context;
+    console.log('[AIMax] Extension activating...');
+
+    const vsCodeWorkspace = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    console.log('[AIMax] VS Code workspace:', vsCodeWorkspace);
+
+    // Find the actual workspace root (where projects/Artifacts exists)
+    const workspaceFolder = vsCodeWorkspace ? findWorkspaceRoot(vsCodeWorkspace) : undefined;
+    console.log('[AIMax] Resolved workspace folder:', workspaceFolder);
+
+    const config = getConfig();
+    console.log('[AIMax] Config:', JSON.stringify(config));
+    serverPort = config.serverPort;
+
+    // Start our HTTP server for serving local files (only if workspace found)
+    if (workspaceFolder) {
+        console.log('[AIMax] Starting HTTP server...');
+        startHttpServer(workspaceFolder);
+    }
+
+    // Create Status Bar item for quick Home access
+    const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
+    statusBarItem.text = '$(home)';
+    statusBarItem.tooltip = 'AIMax Viewer: Open Home';
+    statusBarItem.command = 'aimaxViewer.openHome';
+    statusBarItem.show();
+    context.subscriptions.push(statusBarItem);
+
+    // Register TreeView for sidebar layout
+    treeProvider = new ArtifactsTreeProvider(workspaceFolder, config.browserFolders);
+    const treeView = vscode.window.createTreeView('aimaxViewer.artifactsTree', {
+        treeDataProvider: treeProvider,
+        showCollapseAll: true
+    });
+    context.subscriptions.push(treeView);
+
+    // Register command to open artifact from tree
+    const openFromTreeCommand = vscode.commands.registerCommand('aimaxViewer.openFromTree', (item: ArtifactItem) => {
+        if (item && item.fsPath && workspaceFolder) {
+            const httpUrl = getHttpUrl(item.fsPath, workspaceFolder);
+            openInBrowser(httpUrl);
+        }
+    });
+    context.subscriptions.push(openFromTreeCommand);
+
+    // Register command to refresh tree
+    const refreshTreeCommand = vscode.commands.registerCommand('aimaxViewer.refreshTree', () => {
+        if (treeProvider) {
+            treeProvider.refresh();
+        }
+    });
+    context.subscriptions.push(refreshTreeCommand);
+
+    // Auto-open on startup based on mode setting
+    if (config.startupMode !== 'none') {
+        console.log('[AIMax] Startup mode:', config.startupMode);
+        if (workspaceFolder) {
+            // Normal mode: workspace has projects/Artifacts
+            if (config.startupMode === 'home') {
+                openArtifactsHome(workspaceFolder, config.homePage);
+            } else if (config.startupMode === 'browser') {
+                const artifactsUrl = `http://127.0.0.1:${config.serverPort}/${config.homePage}`;
+                openInBrowser(artifactsUrl, 'Artifacts Browser');
+            }
+        } else {
+            // Fallback mode: show setup instructions from extension's example/index.html
+            console.log('[AIMax] No projects/Artifacts found - showing setup instructions');
+            openSetupInstructions();
+        }
+    } else {
+        console.log('[AIMax] Startup mode: none');
+    }
+
+    // Register browser command
+    const openBrowserCommand = vscode.commands.registerCommand('aimaxViewer.openBrowser', async (urlArg?: string) => {
+        let url = urlArg;
+
+        if (!url) {
+            url = await vscode.window.showInputBox({
+                prompt: 'Enter URL to open',
+                placeHolder: 'http://localhost:2204',
+                value: 'http://localhost:2204'
+            });
+        }
+
+        if (!url) return;
+
+        // Ensure URL has protocol
+        if (!url.startsWith('http://') && !url.startsWith('https://')) {
+            url = 'http://' + url;
+        }
+
+        openInBrowser(url);
+    });
+
+    // Open Home Page command
+    const openHomeCommand = vscode.commands.registerCommand('aimaxViewer.openHome', () => {
+        if (workspaceFolder) {
+            const cfg = getConfig();
+            openArtifactsHome(workspaceFolder, cfg.homePage);
+        }
+    });
+
+    // Open current HTML or MD file in viewer
+    const openCurrentFileCommand = vscode.commands.registerCommand('aimaxViewer.openCurrentFile', () => {
+        const editor = vscode.window.activeTextEditor;
+        if (!editor) {
+            vscode.window.showWarningMessage('No file open');
+            return;
+        }
+        const filePath = editor.document.uri.fsPath;
+        if (!filePath.endsWith('.html') && !filePath.endsWith('.md')) {
+            vscode.window.showWarningMessage('Current file is not an HTML or Markdown file');
+            return;
+        }
+        if (workspaceFolder) {
+            const httpUrl = getHttpUrl(filePath, workspaceFolder);
+            openInBrowser(httpUrl);
+        }
+    });
+
+    // Open file from explorer context menu (right-click)
+    const openFileInViewerCommand = vscode.commands.registerCommand('aimaxViewer.openFileInViewer', (uri: vscode.Uri) => {
+        if (!uri || !uri.fsPath) {
+            vscode.window.showWarningMessage('No file selected');
+            return;
+        }
+        const filePath = uri.fsPath;
+        if (!filePath.endsWith('.html') && !filePath.endsWith('.md')) {
+            vscode.window.showWarningMessage('Selected file is not an HTML or Markdown file');
+            return;
+        }
+        if (workspaceFolder) {
+            const httpUrl = getHttpUrl(filePath, workspaceFolder);
+            openInBrowser(httpUrl);
+        }
+    });
+
+    // Copy viewer state for Claude
+    const copyViewerStateCommand = vscode.commands.registerCommand('aimaxViewer.copyViewerState', async () => {
+        const state = getCurrentViewerState();
+        if (state) {
+            const stateText = `**AIMax Viewer State**
+- URL: ${state.url}
+- Title: ${state.title}
+- Panel: ${state.panel}
+- Timestamp: ${state.timestamp}`;
+            await vscode.env.clipboard.writeText(stateText);
+            vscode.window.showInformationMessage('Viewer state copied to clipboard');
+        } else {
+            vscode.window.showWarningMessage('No viewer panel is currently open');
+        }
+    });
+
+    // Command: Open new terminal
+    const openTerminalCommand = vscode.commands.registerCommand('aimaxViewer.openTerminal', () => {
+        vscode.commands.executeCommand('workbench.action.terminal.new');
+    });
+
+    // Command: Open Claude Code (new conversation)
+    const openClaudeCodeCommand = vscode.commands.registerCommand('aimaxViewer.openClaudeCode', () => {
+        // Just open new conversation - it handles focus automatically
+        vscode.commands.executeCommand('claude-vscode.newConversation');
+    });
+
+    // Command: Open Artifacts Browser (opens browser panel with artifacts dropdown)
+    const openArtifactsBrowserCommand = vscode.commands.registerCommand('aimaxViewer.openArtifactsBrowser', () => {
+        if (workspaceFolder) {
+            const cfg = getConfig();
+            // Open the artifacts index via HTTP server
+            const artifactsUrl = `http://127.0.0.1:${cfg.serverPort}/projects/Artifacts/index.html`;
+            openInBrowser(artifactsUrl, 'Artifacts Browser');
+        }
+    });
+
+    // URI handler for vscode:// links
+    const uriHandler = vscode.window.registerUriHandler({
+        handleUri(uri: vscode.Uri) {
+            if (uri.path === '/openBrowser') {
+                const url = uri.query; // e.g., vscode://aimax.aimax-viewer/openBrowser?http://localhost:8080
+                if (url) {
+                    openInBrowser(url);
+                }
+            } else if (uri.path === '/openHome') {
+                if (workspaceFolder) {
+                    const cfg = getConfig();
+                    openArtifactsHome(workspaceFolder, cfg.homePage);
+                }
+            } else if (uri.path === '/openCurrentFile') {
+                vscode.commands.executeCommand('aimaxViewer.openCurrentFile');
+            } else if (uri.path === '/openTerminal') {
+                vscode.commands.executeCommand('aimaxViewer.openTerminal');
+            } else if (uri.path === '/openClaudeCode') {
+                vscode.commands.executeCommand('aimaxViewer.openClaudeCode');
+            }
+        }
+    });
+
+    context.subscriptions.push(
+        openBrowserCommand,
+        openHomeCommand,
+        openCurrentFileCommand,
+        openFileInViewerCommand,
+        copyViewerStateCommand,
+        openTerminalCommand,
+        openClaudeCodeCommand,
+        openArtifactsBrowserCommand,
+        uriHandler
+    );
+}
+
+function openInBrowser(url: string, customTitle?: string) {
+    const config = getConfig();
+
+    // Extract title from URL path for local files
+    let pageTitle = customTitle;
+    if (!pageTitle) {
+        try {
+            const urlObj = new URL(url);
+            const pathParts = urlObj.pathname.split('/').filter(p => p);
+            const fileName = pathParts[pathParts.length - 1] || '';
+            if (fileName.endsWith('.html') || fileName.endsWith('.md')) {
+                // Use filename without extension as title
+                pageTitle = fileName.replace('.html', '').replace('.md', '').replace(/_/g, ' ');
+                // Capitalize first letter of each word
+                pageTitle = pageTitle.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+            } else {
+                pageTitle = urlObj.hostname;
+            }
+        } catch {
+            pageTitle = 'AIMax Browser';
+        }
+    }
+
+    // Multi-tab mode: always create new panel
+    // Single-tab mode: reuse existing panel
+    if (config.multiTab) {
+        // Create a new panel for each URL
+        const newPanel = vscode.window.createWebviewPanel(
+            'aimaxBrowser',
+            pageTitle,
+            vscode.ViewColumn.Two,
+            {
+                enableScripts: true,
+                retainContextWhenHidden: true,
+                localResourceRoots: [extensionContext.extensionUri]
+            }
+        );
+
+        // Get favicon URI
+        const faviconPath = vscode.Uri.joinPath(extensionContext.extensionUri, 'icon.png');
+        const faviconUri = newPanel.webview.asWebviewUri(faviconPath).toString();
+
+        // Handle messages from webview
+        newPanel.webview.onDidReceiveMessage(message => {
+            if (message.command === 'openExternal' && message.url) {
+                vscode.env.openExternal(vscode.Uri.parse(message.url));
+            } else if (message.command === 'updateTitle' && message.title) {
+                newPanel.title = message.title;
+            } else if (message.command === 'openCurrentFile') {
+                vscode.commands.executeCommand('aimaxViewer.openCurrentFile');
+            } else if (message.command === 'copyViewerState') {
+                vscode.commands.executeCommand('aimaxViewer.copyViewerState');
+            } else if (message.command === 'openTerminal') {
+                vscode.commands.executeCommand('aimaxViewer.openTerminal');
+            } else if (message.command === 'openClaudeCode') {
+                vscode.commands.executeCommand('aimaxViewer.openClaudeCode');
+            }
+        });
+
+        newPanel.webview.html = getBrowserHtml(url, pageTitle, faviconUri);
+        updateViewerState(url, pageTitle, 'browser');
+        return;
+    }
+
+    // Single-tab mode: reuse browserPanel
+    if (browserPanel) {
+        browserPanel.reveal(vscode.ViewColumn.Two);
+    } else {
+        browserPanel = vscode.window.createWebviewPanel(
+            'aimaxBrowser',
+            pageTitle,
+            vscode.ViewColumn.Two,
+            {
+                enableScripts: true,
+                retainContextWhenHidden: true,
+                localResourceRoots: [extensionContext.extensionUri]
+            }
+        );
+
+        browserPanel.onDidDispose(() => {
+            browserPanel = undefined;
+        });
+
+        // Handle messages from webview
+        browserPanel.webview.onDidReceiveMessage(message => {
+            if (message.command === 'openExternal' && message.url) {
+                vscode.env.openExternal(vscode.Uri.parse(message.url));
+            } else if (message.command === 'updateTitle' && message.title) {
+                if (browserPanel) {
+                    browserPanel.title = message.title;
+                }
+            } else if (message.command === 'openCurrentFile') {
+                vscode.commands.executeCommand('aimaxViewer.openCurrentFile');
+            } else if (message.command === 'copyViewerState') {
+                vscode.commands.executeCommand('aimaxViewer.copyViewerState');
+            } else if (message.command === 'openTerminal') {
+                vscode.commands.executeCommand('aimaxViewer.openTerminal');
+            } else if (message.command === 'openClaudeCode') {
+                vscode.commands.executeCommand('aimaxViewer.openClaudeCode');
+            }
+        });
+    }
+
+    // Get favicon URI
+    const faviconPath = vscode.Uri.joinPath(extensionContext.extensionUri, 'icon.png');
+    const faviconUri = browserPanel.webview.asWebviewUri(faviconPath).toString();
+
+    browserPanel.title = pageTitle;
+    browserPanel.webview.html = getBrowserHtml(url, pageTitle, faviconUri);
+    updateViewerState(url, pageTitle, 'browser');
+}
+
+function getBrowserHtml(url: string, title: string, faviconUri: string): string {
+    const csp = generateCSP();
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy" content="${csp}">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: #1e1e1e;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        .toolbar {
+            background: linear-gradient(90deg, #1a1a2e 0%, #16213e 100%);
+            padding: 8px 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            border-bottom: 2px solid #00d4ff;
+        }
+        .brand-icon {
+            height: 22px;
+            width: auto;
+            cursor: pointer;
+            border-radius: 4px;
+            transition: opacity 0.2s;
+            margin-right: 4px;
+        }
+        .brand-icon:hover { opacity: 0.7; }
+        .nav-btn {
+            background: transparent;
+            border: 1px solid rgba(255,255,255,0.15);
+            color: #666;
+            padding: 2px 6px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            font-family: system-ui;
+            line-height: 1;
+        }
+        .nav-btn:hover:not(:disabled) { color: #00d4ff; border-color: #00d4ff; }
+        .nav-btn:disabled { opacity: 0.3; cursor: default; }
+        .select-wrapper {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            background: #3c3c3c;
+            border-radius: 4px;
+            position: relative;
+        }
+        .select-wrapper:hover { background: #4c4c4c; }
+        .artifact-select {
+            flex: 1;
+            background: transparent;
+            border: none;
+            color: #cccccc;
+            padding: 6px 12px;
+            padding-right: 28px;
+            font-size: 12px;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            cursor: pointer;
+            appearance: none;
+            -webkit-appearance: none;
+        }
+        .artifact-select option {
+            background: #252526;
+            color: #cccccc;
+        }
+        .select-info-btn {
+            background: transparent;
+            border: none;
+            color: #888;
+            font-size: 12px;
+            cursor: pointer;
+            padding: 4px 8px;
+            position: relative;
+        }
+        .select-info-btn:hover { color: #00d4ff; }
+        .info-tooltip {
+            display: none;
+            position: absolute;
+            top: 100%;
+            right: 0;
+            background: #1e1e1e;
+            border: 1px solid #3c3c3c;
+            border-radius: 4px;
+            padding: 6px 10px;
+            font-size: 11px;
+            font-family: monospace;
+            color: #cccccc;
+            white-space: nowrap;
+            z-index: 100001;
+            margin-top: 4px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+        }
+        .select-info-btn:hover .info-tooltip { display: block; }
+        .title-badge {
+            background: #0e639c;
+            color: white;
+            padding: 4px 10px;
+            border-radius: 4px;
+            font-size: 11px;
+        }
+        .toolbar-btn {
+            background: transparent;
+            border: 1px solid #3c3c3c;
+            color: #cccccc;
+            font-size: 11px;
+            cursor: pointer;
+            padding: 4px 8px;
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+        .toolbar-btn:hover {
+            color: #00d4ff;
+            border-color: #00d4ff;
+        }
+        .menu-btn {
+            background: transparent;
+            border: none;
+            color: #cccccc;
+            font-size: 18px;
+            cursor: pointer;
+            padding: 4px 8px;
+        }
+        .menu-btn:hover { color: #00d4ff; }
+        .menu {
+            display: none;
+            position: fixed;
+            top: 44px;
+            right: 12px;
+            background: #252526;
+            border: 1px solid #3c3c3c;
+            border-radius: 8px;
+            padding: 8px 0;
+            z-index: 100000;
+            min-width: 200px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        }
+        .menu.open { display: block; }
+        .menu-item {
+            display: block;
+            padding: 8px 16px;
+            color: #cccccc;
+            text-decoration: none;
+            font-size: 13px;
+            cursor: pointer;
+            border: none;
+            background: none;
+            width: 100%;
+            text-align: left;
+        }
+        .menu-item:hover { background: #3c3c3c; color: #00d4ff; }
+        .menu-divider { border-top: 1px solid #3c3c3c; margin: 4px 0; }
+        iframe {
+            flex: 1;
+            border: none;
+            background: white;
+        }
+        .error {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            color: #cccccc;
+            text-align: center;
+            padding: 40px;
+        }
+        .error h2 { margin-bottom: 16px; color: #e06c75; }
+        .error p { margin-bottom: 24px; opacity: 0.8; }
+    </style>
+</head>
+<body>
+    <div class="toolbar">
+        <button class="nav-btn" id="backBtn" onclick="goBack()" title="Back" disabled>←</button>
+        <button class="nav-btn" id="fwdBtn" onclick="goForward()" title="Forward" disabled>→</button>
+        <button class="nav-btn" onclick="reload()" title="Reload">↻</button>
+        <div class="select-wrapper">
+            <select class="artifact-select" id="artifactSelect" onchange="loadArtifact(this.value)">
+                <option value="">Loading artifacts...</option>
+            </select>
+            <button class="select-info-btn" id="infoBtn">
+                ⓘ
+                <span class="info-tooltip" id="infoTooltip">${url}</span>
+            </button>
+        </div>
+        <button class="toolbar-btn" onclick="openTerminal()" title="Open new terminal">
+            <span style="color: #00d4ff; font-size: 14px;">&gt;</span>
+        </button>
+        <button class="toolbar-btn" onclick="openClaudeCode()" title="New Claude Code conversation">
+            <span style="color: #ff9500; font-size: 14px;">*</span>
+        </button>
+        <button class="menu-btn" onclick="toggleMenu()">☰</button>
+    </div>
+    <div class="menu" id="menu">
+        <button class="menu-item" onclick="reload()">Reload</button>
+        <button class="menu-item" onclick="copyUrl()">Copy URL</button>
+        <button class="menu-item" onclick="openExternal()">Open in External Browser</button>
+        <div class="menu-divider"></div>
+        <button class="menu-item" onclick="goHome()">Go to Home</button>
+        <button class="menu-item" onclick="openCurrentFile()">Open Current Editor File</button>
+        <button class="menu-item" onclick="copyViewerState()">Copy Viewer State</button>
+    </div>
+    <iframe id="frame" src="${url}" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox"></iframe>
+
+    <script>
+        const vscode = acquireVsCodeApi();
+        const frame = document.getElementById('frame');
+        const artifactSelect = document.getElementById('artifactSelect');
+        const infoTooltip = document.getElementById('infoTooltip');
+        let currentUrl = '${url}';
+
+        // History management
+        let navHistory = ['${url}'];
+        let historyIndex = 0;
+
+        function updateNavButtons() {
+            document.getElementById('backBtn').disabled = historyIndex <= 0;
+            document.getElementById('fwdBtn').disabled = historyIndex >= navHistory.length - 1;
+        }
+
+        function goBack() {
+            if (historyIndex > 0) {
+                historyIndex--;
+                navigateToUrl(navHistory[historyIndex], false);
+            }
+        }
+
+        function goForward() {
+            if (historyIndex < navHistory.length - 1) {
+                historyIndex++;
+                navigateToUrl(navHistory[historyIndex], false);
+            }
+        }
+
+        function navigateToUrl(url, addToHistory = true) {
+            console.log('[AIMax Nav] navigateToUrl:', url, 'addToHistory:', addToHistory);
+            console.log('[AIMax Nav] current history:', navHistory, 'index:', historyIndex);
+            if (addToHistory && url !== navHistory[historyIndex]) {
+                // Truncate forward history and add new entry
+                navHistory = navHistory.slice(0, historyIndex + 1);
+                navHistory.push(url);
+                historyIndex = navHistory.length - 1;
+                console.log('[AIMax Nav] Added to history. New history:', navHistory, 'index:', historyIndex);
+            }
+            frame.src = url;
+            currentUrl = url;
+            updateUrlDisplay(url);
+            updateNavButtons();
+            console.log('[AIMax Nav] Back disabled:', document.getElementById('backBtn').disabled);
+
+            // Extract title from URL
+            const fileName = url.split('/').pop().replace('.html', '').replace('.md', '').replace(/_/g, ' ');
+            const title = fileName.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+            vscode.postMessage({ command: 'updateTitle', title: title });
+        }
+
+        // Update URL tooltip
+        function updateUrlDisplay(url) {
+            infoTooltip.textContent = url;
+        }
+
+        // Load artifacts list grouped by folder
+        async function loadArtifactsList() {
+            try {
+                const response = await fetch('http://127.0.0.1:${serverPort}/api/artifacts');
+                const artifacts = await response.json();
+
+                artifactSelect.innerHTML = '<option value="">📁 Select an Artifact...</option>';
+                artifactSelect.innerHTML += '<option value="http://127.0.0.1:${serverPort}/projects/Artifacts/index.html">🏠 Home (index.html)</option>';
+
+                // Group artifacts by folderLabel
+                const grouped = {};
+                artifacts.forEach(artifact => {
+                    const label = artifact.folderLabel || 'Artifacts';
+                    if (!grouped[label]) grouped[label] = [];
+                    grouped[label].push(artifact);
+                });
+
+                // Create optgroups for each folder
+                const folderLabels = Object.keys(grouped);
+                if (folderLabels.length > 1) {
+                    // Multiple folders: use optgroups
+                    folderLabels.forEach(label => {
+                        const optgroup = document.createElement('optgroup');
+                        optgroup.label = '📁 ' + label;
+                        grouped[label].forEach(artifact => {
+                            const option = document.createElement('option');
+                            option.value = artifact.url;
+                            const icon = artifact.type === 'md' ? '📝' : '📄';
+                            option.textContent = icon + ' ' + artifact.name;
+                            if (artifact.url === currentUrl) {
+                                option.selected = true;
+                            }
+                            optgroup.appendChild(option);
+                        });
+                        artifactSelect.appendChild(optgroup);
+                    });
+                } else {
+                    // Single folder: flat list
+                    artifacts.forEach(artifact => {
+                        const option = document.createElement('option');
+                        option.value = artifact.url;
+                        const icon = artifact.type === 'md' ? '📝' : '📄';
+                        option.textContent = icon + ' ' + artifact.name;
+                        if (artifact.url === currentUrl) {
+                            option.selected = true;
+                        }
+                        artifactSelect.appendChild(option);
+                    });
+                }
+            } catch (e) {
+                artifactSelect.innerHTML = '<option value="">Failed to load artifacts</option>';
+            }
+        }
+
+        function loadArtifact(url) {
+            if (!url) return;
+            navigateToUrl(url, true);
+        }
+
+        function toggleMenu() {
+            document.getElementById('menu').classList.toggle('open');
+        }
+
+        function reload() {
+            frame.src = frame.src;
+            toggleMenu();
+        }
+
+        function copyUrl() {
+            navigator.clipboard.writeText(currentUrl);
+            toggleMenu();
+        }
+
+        function openExternal() {
+            vscode.postMessage({ command: 'openExternal', url: currentUrl });
+            toggleMenu();
+        }
+
+        function goHome() {
+            const homeUrl = 'http://127.0.0.1:${serverPort}/projects/Artifacts/index.html';
+            navigateToUrl(homeUrl, true);
+            artifactSelect.value = homeUrl;
+            toggleMenu();
+        }
+
+        function openCurrentFile() {
+            vscode.postMessage({ command: 'openCurrentFile' });
+            toggleMenu();
+        }
+
+        function copyViewerState() {
+            vscode.postMessage({ command: 'copyViewerState' });
+            toggleMenu();
+        }
+
+        function openTerminal() {
+            vscode.postMessage({ command: 'openTerminal' });
+        }
+
+        function openClaudeCode() {
+            vscode.postMessage({ command: 'openClaudeCode' });
+        }
+
+        // Close menu on outside click
+        document.addEventListener('click', (e) => {
+            if (!e.target.closest('.menu-btn') && !e.target.closest('.menu')) {
+                document.getElementById('menu').classList.remove('open');
+            }
+        });
+
+        // Track iframe navigation (when user clicks links inside iframe)
+        frame.onload = function() {
+            console.log('[AIMax Nav] === IFRAME ONLOAD FIRED ===');
+            try {
+                const newUrl = frame.contentWindow?.location.href;
+                console.log('[AIMax Nav] newUrl from iframe:', newUrl);
+                console.log('[AIMax Nav] currentUrl tracked:', currentUrl);
+                console.log('[AIMax Nav] Are they equal?', newUrl === currentUrl);
+
+                // If URL changed and it's not from our navigation, add to history
+                if (newUrl && newUrl !== currentUrl && newUrl !== 'about:blank') {
+                    console.log('[AIMax Nav] URL CHANGED! Detected internal navigation to:', newUrl);
+                    // Add to history without changing frame.src (it already loaded)
+                    if (newUrl !== navHistory[historyIndex]) {
+                        navHistory = navHistory.slice(0, historyIndex + 1);
+                        navHistory.push(newUrl);
+                        historyIndex = navHistory.length - 1;
+                        console.log('[AIMax Nav] Added to history. New index:', historyIndex, 'history length:', navHistory.length);
+                    }
+                    currentUrl = newUrl;
+                    updateUrlDisplay(newUrl);
+                    updateNavButtons();
+                    console.log('[AIMax Nav] Back button disabled?', document.getElementById('backBtn').disabled);
+                } else {
+                    console.log('[AIMax Nav] URL unchanged or about:blank, skipping history update');
+                }
+
+                // Try to get page title
+                const iframeTitle = frame.contentDocument?.title;
+                if (iframeTitle) {
+                    vscode.postMessage({ command: 'updateTitle', title: iframeTitle });
+                }
+            } catch (e) {
+                // Cross-origin, can't access URL/title
+                console.log('[AIMax Nav] ERROR accessing iframe:', e);
+            }
+        };
+
+        // Initialize
+        loadArtifactsList();
+
+        // Handle iframe load errors
+        frame.onerror = function() {
+            document.body.innerHTML = \`
+                <div class="error">
+                    <h2>Cannot load page</h2>
+                    <p>The page might be unavailable or blocked by security restrictions.</p>
+                    <br><br>
+                    <button onclick="openExternal()" style="background:#0e639c;color:white;border:none;padding:8px 16px;border-radius:4px;cursor:pointer;">Open in External Browser</button>
+                </div>
+            \`;
+        };
+    </script>
+</body>
+</html>`;
+}
+
+function startHttpServer(workspaceFolder: string) {
+    if (httpServer) {
+        return; // Already running
+    }
+
+    const mimeTypes: { [key: string]: string } = {
+        '.html': 'text/html',
+        '.css': 'text/css',
+        '.js': 'application/javascript',
+        '.json': 'application/json',
+        '.png': 'image/png',
+        '.jpg': 'image/jpeg',
+        '.jpeg': 'image/jpeg',
+        '.gif': 'image/gif',
+        '.svg': 'image/svg+xml',
+        '.ico': 'image/x-icon',
+        '.woff': 'font/woff',
+        '.woff2': 'font/woff2',
+        '.ttf': 'font/ttf',
+        '.md': 'text/html',  // Served as HTML after conversion
+        '.markdown': 'text/html'
+    };
+
+    httpServer = http.createServer((req, res) => {
+        const url = req.url || '/';
+
+        // API endpoint: list artifact files from all configured folders
+        if (url === '/api/artifacts') {
+            const config = getConfig();
+            const allFilesPromises = config.browserFolders.map(async (folder) => {
+                // Support absolute paths (works on Mac, Windows, Linux)
+                const folderPath = path.isAbsolute(folder.path)
+                    ? folder.path
+                    : path.join(workspaceFolder, folder.path);
+                if (fs.existsSync(folderPath)) {
+                    return listArtifactFiles(folderPath, workspaceFolder, folder.label);
+                }
+                return [];
+            });
+
+            Promise.all(allFilesPromises).then(results => {
+                const allFiles = results.flat().sort((a, b) => b.modified - a.modified);
+                res.writeHead(200, {
+                    'Content-Type': 'application/json',
+                    'Access-Control-Allow-Origin': '*'
+                });
+                res.end(JSON.stringify(allFiles));
+            }).catch(() => {
+                res.writeHead(500, { 'Access-Control-Allow-Origin': '*' });
+                res.end(JSON.stringify({ error: 'Failed to list artifacts' }));
+            });
+            return;
+        }
+
+        const filePath = path.join(workspaceFolder, decodeURIComponent(url));
+
+        // Security: only serve files within workspace
+        if (!filePath.startsWith(workspaceFolder)) {
+            res.writeHead(403);
+            res.end('Forbidden');
+            return;
+        }
+
+        // Check if file exists
+        if (!fs.existsSync(filePath)) {
+            res.writeHead(404, { 'Access-Control-Allow-Origin': '*' });
+            res.end('Not found');
+            return;
+        }
+
+        const ext = path.extname(filePath).toLowerCase();
+
+        // Handle Markdown files: convert to HTML
+        if (ext === '.md' || ext === '.markdown') {
+            try {
+                const content = fs.readFileSync(filePath, 'utf-8');
+                const title = path.basename(filePath, ext).replace(/_/g, ' ');
+                const html = wrapMarkdownHtml(parseMarkdown(content), title);
+                res.writeHead(200, {
+                    'Content-Type': 'text/html; charset=utf-8',
+                    'Access-Control-Allow-Origin': '*'
+                });
+                res.end(html);
+            } catch (err) {
+                res.writeHead(500, { 'Access-Control-Allow-Origin': '*' });
+                res.end('Error processing markdown');
+            }
+            return;
+        }
+
+        // Serve other files normally
+        fs.readFile(filePath, (err, data) => {
+            if (err) {
+                res.writeHead(404, { 'Access-Control-Allow-Origin': '*' });
+                res.end('Not found');
+                return;
+            }
+
+            const contentType = mimeTypes[ext] || 'application/octet-stream';
+            res.writeHead(200, {
+                'Content-Type': contentType,
+                'Access-Control-Allow-Origin': '*',
+                'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+                'Access-Control-Allow-Headers': 'Content-Type'
+            });
+            res.end(data);
+        });
+    });
+
+    httpServer.listen(serverPort, '127.0.0.1', () => {
+        console.log(`AIMax HTTP server running on http://127.0.0.1:${serverPort}`);
+    });
+
+    // Try next port if current is busy
+    httpServer.on('error', (e: NodeJS.ErrnoException) => {
+        if (e.code === 'EADDRINUSE') {
+            serverPort++;
+            httpServer = undefined;
+            startHttpServer(workspaceFolder);
+        }
+    });
+}
+
+function getHttpUrl(filePath: string, workspaceFolder: string): string {
+    // Convert file path to HTTP URL via our server
+    const relativePath = filePath.replace(workspaceFolder, '').replace(/^\//, '');
+    return `http://127.0.0.1:${serverPort}/${relativePath}`;
+}
+
+// Recursively list artifact files (HTML and MD) in a directory
+async function listArtifactFiles(
+    dir: string,
+    workspaceFolder: string,
+    folderLabel: string = 'Artifacts'
+): Promise<{name: string, path: string, url: string, modified: number, type: 'html' | 'md', folderLabel: string}[]> {
+    const results: {name: string, path: string, url: string, modified: number, type: 'html' | 'md', folderLabel: string}[] = [];
+
+    async function scan(currentDir: string) {
+        const entries = await fs.promises.readdir(currentDir, { withFileTypes: true });
+        for (const entry of entries) {
+            const fullPath = path.join(currentDir, entry.name);
+            if (entry.isDirectory()) {
+                await scan(fullPath);
+            } else {
+                const isHtml = entry.name.endsWith('.html') && entry.name !== 'index.html';
+                const isMd = entry.name.endsWith('.md');
+
+                if (isHtml || isMd) {
+                    const stats = await fs.promises.stat(fullPath);
+                    const relativePath = fullPath.replace(workspaceFolder + '/', '');
+                    const ext = isHtml ? '.html' : '.md';
+                    results.push({
+                        name: entry.name.replace(ext, '').replace(/_/g, ' '),
+                        path: relativePath,
+                        url: `http://127.0.0.1:${serverPort}/${relativePath}`,
+                        modified: stats.mtimeMs,
+                        type: isHtml ? 'html' : 'md',
+                        folderLabel: folderLabel
+                    });
+                }
+            }
+        }
+    }
+
+    await scan(dir);
+    // Sort by modification date, newest first
+    return results.sort((a, b) => b.modified - a.modified);
+}
+
+// Open home page with link handler (reads file directly, intercepts clicks)
+function openArtifactsHome(workspaceFolder: string, homePage: string = 'projects/Artifacts/index.html') {
+    const indexPath = path.join(workspaceFolder, homePage);
+
+    if (!fs.existsSync(indexPath)) {
+        console.log('[AIMax] Home page not found:', indexPath);
+        return;
+    }
+
+    console.log('[AIMax] Opening home page:', indexPath);
+
+    // Read HTML file directly
+    let htmlContent = fs.readFileSync(indexPath, 'utf8');
+
+    if (homePanel) {
+        homePanel.reveal(vscode.ViewColumn.One);
+    } else {
+        homePanel = vscode.window.createWebviewPanel(
+            'aimaxHome',
+            'Artifacts Home',
+            vscode.ViewColumn.One,
+            {
+                enableScripts: true,
+                retainContextWhenHidden: true,
+                localResourceRoots: [
+                    vscode.Uri.file(path.join(workspaceFolder, 'projects')),
+                    extensionContext.extensionUri
+                ]
+            }
+        );
+
+        homePanel.onDidDispose(() => {
+            homePanel = undefined;
+        });
+
+        // Handle link clicks and toolbar buttons
+        homePanel.webview.onDidReceiveMessage(message => {
+            if (message.command === 'openUrl') {
+                const url = message.url;
+                console.log('[AIMax] Link clicked:', url);
+                if (url.startsWith('vscode://')) {
+                    // Handle vscode:// protocol internally
+                    if (url.includes('/openBrowser')) {
+                        const targetUrl = url.split('?')[1];
+                        if (targetUrl) {
+                            openInBrowser(targetUrl);
+                        }
+                    }
+                } else if (url.startsWith('http://localhost') || url.startsWith('http://127.0.0.1')) {
+                    openInBrowser(url);
+                } else {
+                    // External URLs - open in system browser
+                    vscode.env.openExternal(vscode.Uri.parse(url));
+                }
+            } else if (message.command === 'navigateLocal') {
+                // Open local file in browser panel
+                const filePath = path.join(workspaceFolder, 'projects', message.path);
+                if (fs.existsSync(filePath)) {
+                    const httpUrl = getHttpUrl(filePath, workspaceFolder);
+                    openInBrowser(httpUrl);
+                }
+            } else if (message.command === 'openTerminal') {
+                vscode.commands.executeCommand('workbench.action.terminal.new');
+            } else if (message.command === 'openClaudeCode') {
+                vscode.commands.executeCommand('claude-vscode.newConversation');
+            } else if (message.command === 'openArtifactsBrowser') {
+                vscode.commands.executeCommand('aimaxViewer.openArtifactsBrowser');
+            }
+        });
+    }
+
+    // Get favicon URI
+    const faviconPath = vscode.Uri.joinPath(extensionContext.extensionUri, 'icon.png');
+    const faviconUri = homePanel.webview.asWebviewUri(faviconPath).toString();
+
+    const httpUrl = getHttpUrl(indexPath, workspaceFolder);
+    homePanel.webview.html = wrapWithToolbarAndLinkHandler(htmlContent, 'Artifacts Home', faviconUri);
+    updateViewerState(httpUrl, 'Artifacts Home', 'home');
+}
+
+// Wrap HTML with toolbar and inject link handler
+function wrapWithToolbarAndLinkHandler(html: string, title: string, faviconUri: string): string {
+    const toolbarStyles = `
+    <style>
+        .aimax-toolbar {
+            background: linear-gradient(90deg, #1a1a2e 0%, #16213e 100%);
+            padding: 8px 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            border-bottom: 2px solid #00d4ff;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            z-index: 100000;
+        }
+        .aimax-brand-icon {
+            height: 22px;
+            width: auto;
+            cursor: pointer;
+            border-radius: 4px;
+            transition: opacity 0.2s;
+            margin-right: 4px;
+        }
+        .aimax-brand-icon:hover { opacity: 0.7; }
+        .aimax-nav-btn {
+            background: transparent;
+            border: 1px solid rgba(255,255,255,0.15);
+            color: #666;
+            padding: 2px 6px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            font-family: system-ui;
+            line-height: 1;
+        }
+        .aimax-nav-btn:hover:not(:disabled) { color: #00d4ff; border-color: #00d4ff; }
+        .aimax-nav-btn:disabled { opacity: 0.3; cursor: default; }
+        .aimax-title {
+            color: #cccccc;
+            font-size: 12px;
+            flex: 1;
+        }
+        .aimax-toolbar-btn {
+            background: transparent;
+            border: 1px solid #3c3c3c;
+            color: #cccccc;
+            font-size: 11px;
+            cursor: pointer;
+            padding: 4px 8px;
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+        .aimax-toolbar-btn:hover {
+            color: #00d4ff;
+            border-color: #00d4ff;
+        }
+        .aimax-info-btn {
+            background: transparent;
+            border: none;
+            color: #888;
+            font-size: 14px;
+            cursor: pointer;
+            padding: 4px 6px;
+        }
+        .aimax-info-btn:hover { color: #00d4ff; }
+        .aimax-content-wrapper {
+            padding-top: 44px;
+        }
+    </style>
+    `;
+
+    const toolbar = `
+    <div class="aimax-toolbar">
+        <img src="${faviconUri}" class="aimax-brand-icon" onclick="goHome()" alt="AI, MAX" title="Home" />
+        <button class="aimax-nav-btn" id="backBtn" onclick="goBack()" title="Back" disabled>←</button>
+        <button class="aimax-nav-btn" id="fwdBtn" onclick="goForward()" title="Forward" disabled>→</button>
+        <button class="aimax-info-btn" onclick="reload()" title="Reload" style="font-size: 18px;">↻</button>
+        <span class="aimax-title">${title}</span>
+        <button class="aimax-toolbar-btn" onclick="openArtifactsBrowser()" title="Open Artifacts Browser">
+            <span style="font-size: 12px;">[:]</span>
+        </button>
+        <button class="aimax-toolbar-btn" onclick="openTerminal()" title="Open new terminal">
+            <span style="font-family: monospace; font-weight: bold;">&gt;_</span>
+        </button>
+        <button class="aimax-toolbar-btn" onclick="openClaudeCode()" title="New Claude Code conversation">
+            <span style="color: #ff9500; font-size: 14px;">*</span>
+        </button>
+    </div>
+    `;
+
+    const script = `
+    <script>
+        const vscode = acquireVsCodeApi();
+
+        function goHome() {
+            // Already on home, just scroll to top
+            window.scrollTo(0, 0);
+        }
+
+        function goBack() {
+            // Home page has no navigation history - buttons stay disabled
+        }
+
+        function goForward() {
+            // Home page has no navigation history - buttons stay disabled
+        }
+
+        function openTerminal() {
+            vscode.postMessage({ command: 'openTerminal' });
+        }
+
+        function openClaudeCode() {
+            vscode.postMessage({ command: 'openClaudeCode' });
+        }
+
+        function openArtifactsBrowser() {
+            vscode.postMessage({ command: 'openArtifactsBrowser' });
+        }
+
+        function reload() {
+            location.reload();
+        }
+
+        document.addEventListener('click', (e) => {
+            const link = e.target.closest('a');
+            if (!link) return;
+
+            const href = link.getAttribute('href');
+            if (!href) return;
+
+            // Handle different URL types
+            if (href.startsWith('vscode://') ||
+                href.startsWith('http://localhost') ||
+                href.startsWith('http://127.0.0.1') ||
+                href.startsWith('http://') ||
+                href.startsWith('https://')) {
+                e.preventDefault();
+                vscode.postMessage({ command: 'openUrl', url: href });
+            } else if (href.startsWith('../') || (!href.startsWith('http') && href.endsWith('.html'))) {
+                e.preventDefault();
+                vscode.postMessage({ command: 'navigateLocal', path: href.replace('../', '') });
+            }
+        });
+    </script>
+    `;
+
+    // Inject styles in head
+    let result = html.replace('</head>', toolbarStyles + '</head>');
+
+    // Wrap body content with toolbar and wrapper
+    result = result.replace(/<body([^>]*)>/, `<body$1>${toolbar}<div class="aimax-content-wrapper">`);
+    result = result.replace('</body>', '</div>' + script + '</body>');
+
+    return result;
+}
+
+// Show setup instructions when projects/Artifacts folder is not found
+function openSetupInstructions() {
+    const examplePath = path.join(extensionContext.extensionPath, 'example', 'index.html');
+
+    if (!fs.existsSync(examplePath)) {
+        console.log('[AIMax] Example file not found:', examplePath);
+        vscode.window.showWarningMessage('AIMax Viewer: Setup instructions not found. Please create projects/Artifacts/ folder in your workspace.');
+        return;
+    }
+
+    console.log('[AIMax] Opening setup instructions:', examplePath);
+
+    // Read HTML file directly
+    let htmlContent = fs.readFileSync(examplePath, 'utf8');
+
+    const panel = vscode.window.createWebviewPanel(
+        'aimaxSetup',
+        'AIMax Viewer Setup',
+        vscode.ViewColumn.One,
+        {
+            enableScripts: true,
+            retainContextWhenHidden: true,
+            localResourceRoots: [
+                extensionContext.extensionUri,
+                vscode.Uri.joinPath(extensionContext.extensionUri, 'example')
+            ]
+        }
+    );
+
+    // Get favicon URI
+    const faviconPath = vscode.Uri.joinPath(extensionContext.extensionUri, 'icon.png');
+    const faviconUri = panel.webview.asWebviewUri(faviconPath).toString();
+
+    // Wrap with minimal toolbar (no navigation since it's standalone)
+    panel.webview.html = wrapSetupPageWithToolbar(htmlContent, 'AIMax Viewer Setup', faviconUri);
+}
+
+// Simplified wrapper for setup page (no navigation needed)
+function wrapSetupPageWithToolbar(html: string, title: string, faviconUri: string): string {
+    const toolbarStyles = `
+    <style>
+        .aimax-toolbar {
+            background: linear-gradient(90deg, #1a1a2e 0%, #16213e 100%);
+            padding: 8px 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            border-bottom: 2px solid #00d4ff;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            z-index: 100000;
+        }
+        .aimax-brand-icon {
+            height: 22px;
+            width: auto;
+            border-radius: 4px;
+            margin-right: 4px;
+        }
+        .aimax-title {
+            color: #cccccc;
+            font-size: 12px;
+            flex: 1;
+        }
+        .aimax-content-wrapper {
+            padding-top: 44px;
+        }
+    </style>
+    `;
+
+    const toolbar = `
+    <div class="aimax-toolbar">
+        <img src="${faviconUri}" class="aimax-brand-icon" alt="AI, MAX" title="AI, MAX" />
+        <span class="aimax-title">${title}</span>
+    </div>
+    `;
+
+    // Inject styles in head
+    let result = html.replace('</head>', toolbarStyles + '</head>');
+
+    // Wrap body content with toolbar and wrapper
+    result = result.replace(/<body([^>]*)>/, `<body$1>${toolbar}<div class="aimax-content-wrapper">`);
+    result = result.replace('</body>', '</div></body>');
+
+    return result;
+}
+
+export function deactivate() {
+    if (browserPanel) {
+        browserPanel.dispose();
+    }
+    if (homePanel) {
+        homePanel.dispose();
+    }
+    if (httpServer) {
+        httpServer.close();
+    }
+}

@@ -1,0 +1,220 @@
+{
+  "name": "aimax-viewer",
+  "displayName": "AIMax Viewer",
+  "description": "Auto-open Artifacts at startup + internal browser for localhost",
+  "version": "0.1.16",
+  "publisher": "aimax",
+  "icon": "icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/maxturazzini/aimax-viewer"
+  },
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished",
+    "onUri"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "aimaxViewer.openBrowser",
+        "title": "AIMax Viewer: Open URL in Browser"
+      },
+      {
+        "command": "aimaxViewer.openHome",
+        "title": "AIMax Viewer: Open Home Page"
+      },
+      {
+        "command": "aimaxViewer.openCurrentFile",
+        "title": "AIMax Viewer: Open Current HTML File"
+      },
+      {
+        "command": "aimaxViewer.openFileInViewer",
+        "title": "Open in AIMax Viewer"
+      },
+      {
+        "command": "aimaxViewer.copyViewerState",
+        "title": "AIMax Viewer: Copy State for Claude"
+      },
+      {
+        "command": "aimaxViewer.openTerminal",
+        "title": "AIMax Viewer: Open New Terminal",
+        "icon": "$(terminal)"
+      },
+      {
+        "command": "aimaxViewer.openClaudeCode",
+        "title": "AIMax Viewer: Open Claude Code",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "aimaxViewer.openArtifactsBrowser",
+        "title": "AIMax Viewer: Open Artifacts Browser"
+      },
+      {
+        "command": "aimaxViewer.openFromTree",
+        "title": "Open in Viewer"
+      },
+      {
+        "command": "aimaxViewer.refreshTree",
+        "title": "Refresh",
+        "icon": "$(refresh)"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "aimax-viewer",
+          "title": "AIMax Viewer",
+          "icon": "icon.png"
+        }
+      ]
+    },
+    "views": {
+      "aimax-viewer": [
+        {
+          "id": "aimaxViewer.artifactsTree",
+          "name": "Artifacts"
+        }
+      ]
+    },
+    "menus": {
+      "explorer/context": [
+        {
+          "command": "aimaxViewer.openFileInViewer",
+          "when": "resourceExtname == .html",
+          "group": "navigation"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "aimaxViewer.openTerminal",
+          "when": "view == aimaxViewer.artifactsTree",
+          "group": "navigation@1"
+        },
+        {
+          "command": "aimaxViewer.openClaudeCode",
+          "when": "view == aimaxViewer.artifactsTree",
+          "group": "navigation@2"
+        },
+        {
+          "command": "aimaxViewer.refreshTree",
+          "when": "view == aimaxViewer.artifactsTree",
+          "group": "navigation@3"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "AIMax Viewer",
+      "properties": {
+        "aimaxViewer.server.port": {
+          "type": "number",
+          "default": 3124,
+          "description": "HTTP server port for serving local files"
+        },
+        "aimaxViewer.startup.mode": {
+          "type": "string",
+          "enum": [
+            "home",
+            "browser",
+            "none"
+          ],
+          "default": "home",
+          "description": "What to open at startup: 'home' (direct file with external link support), 'browser' (iframe with artifacts dropdown), or 'none'"
+        },
+        "aimaxViewer.startup.homePage": {
+          "type": "string",
+          "default": "projects/Artifacts/index.html",
+          "description": "Relative path to the home page file (from workspace root)"
+        },
+        "aimaxViewer.console.openByDefault": {
+          "type": "boolean",
+          "default": false,
+          "description": "Show console panel by default when opening artifacts"
+        },
+        "aimaxViewer.webview.enableJavaScript": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable JavaScript execution in webview panels"
+        },
+        "aimaxViewer.panels.multiTab": {
+          "type": "boolean",
+          "default": true,
+          "description": "Open each artifact in a new tab (true) or reuse same tab (false)"
+        },
+        "aimaxViewer.csp.mode": {
+          "type": "string",
+          "enum": [
+            "strict",
+            "permissive",
+            "custom"
+          ],
+          "default": "permissive",
+          "description": "Content Security Policy mode: 'strict' (localhost only), 'permissive' (common CDNs), 'custom' (use allowedDomains)"
+        },
+        "aimaxViewer.csp.allowedDomains": {
+          "type": "array",
+          "default": [
+            "fonts.googleapis.com",
+            "fonts.gstatic.com",
+            "cdn.jsdelivr.net",
+            "cdnjs.cloudflare.com",
+            "unpkg.com"
+          ],
+          "description": "External domains allowed when CSP mode is 'custom' or 'permissive'"
+        },
+        "aimaxViewer.browser.layout": {
+          "type": "string",
+          "enum": [
+            "top",
+            "sidebar"
+          ],
+          "default": "sidebar",
+          "description": "Artifacts browser layout: 'top' (dropdown in toolbar) or 'sidebar' (tree view panel)"
+        },
+        "aimaxViewer.browser.folders": {
+          "type": "array",
+          "default": [
+            {
+              "label": "Artifacts",
+              "path": "projects/Artifacts"
+            }
+          ],
+          "items": {
+            "type": "object",
+            "properties": {
+              "label": {
+                "type": "string",
+                "description": "Display name for the folder"
+              },
+              "path": {
+                "type": "string",
+                "description": "Relative path from workspace root"
+              }
+            },
+            "required": [
+              "label",
+              "path"
+            ]
+          },
+          "description": "Folders to browse for artifacts. Each with label and relative path."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "deploy": "./deploy.sh"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.80.0",
+    "@types/node": "^18.0.0",
+    "typescript": "^5.0.0"
+  }
+}
