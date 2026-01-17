@@ -1,10 +1,19 @@
 # AIMax Viewer
 
-VS Code extension that provides automatic artifact viewing at startup and an internal browser for localhost development.
+VS Code extension that provides automatic HTML/Markdown viewing at startup and an internal browser for localhost development.
 
 ![VS Code Marketplace](https://img.shields.io/badge/VS%20Code-1.80+-blue)
 ![Version](https://img.shields.io/badge/version-0.1.16-green)
 ![License](https://img.shields.io/badge/license-MIT-brightgreen)
+
+## Why use AIMax Viewer instead of external browser?
+
+- **Stay focused** - Opens inside VS Code, no context switching
+- **Navigation** - Toolbar with reload, back/forward buttons
+- **File browser** - Dropdown to quickly switch between files
+- **Markdown support** - `.md` files rendered as styled HTML automatically
+- **AI integration** - Quick access buttons for terminal and Claude Code
+- **Deep links** - `vscode://` URI protocol for automation
 
 ## Features
 
@@ -217,14 +226,6 @@ open "vscode://aimax.aimax-viewer/openBrowser?http://127.0.0.1:3124/<file-path>"
 **NEVER use** external browser (`open file.html`) - always use vscode:// protocol.
 ```
 
-### Why use AIMax Viewer instead of external browser?
-
-- Opens inside VS Code (keeps focus on development)
-- Includes toolbar with reload, back/forward navigation
-- Artifacts dropdown to quickly switch between files
-- Markdown files rendered as HTML automatically
-- Quick access buttons for terminal and Claude Code
-
 ## Example index.html
 
 A generic example is provided in `example/index.html`. Copy it to your `projects/Artifacts/` folder to get started.
@@ -248,7 +249,7 @@ A generic example is provided in `example/index.html`. Copy it to your `projects
 
 ## License
 
-MIT License - Copyright (c) 2024-2025 Max Turazzini
+MIT License - Copyright (c) 2024-2026 Max Turazzini
 
 ---
 
