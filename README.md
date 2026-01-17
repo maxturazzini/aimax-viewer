@@ -45,11 +45,11 @@ Browse all HTML and Markdown files in your configured folders with a dropdown se
 - 📄 HTML files - displayed as-is
 - 📝 Markdown files - automatically converted to styled HTML
 
-### 4. Sidebar TreeView (New in v0.1.16)
+### 4. Sidebar TreeView
 
 A dedicated sidebar panel shows all your artifacts organized by folder. Quick access buttons in the panel header for Terminal and Claude Code.
 
-### 5. Multi-Folder Support (New in v0.1.16)
+### 5. Multi-Folder Support
 
 Configure multiple artifact folders via `aimaxViewer.browser.folders`. Each folder appears as a separate group in the dropdown and TreeView.
 
@@ -63,8 +63,6 @@ Configure multiple artifact folders via `aimaxViewer.browser.folders`. Each fold
 ```
 
 ### 6. Markdown Rendering
-
-**New in v0.1.9** - Full markdown support with server-side rendering.
 
 Markdown files (`.md`) are automatically converted to HTML when served. Supported features:
 - Headings (H1-H3)
@@ -86,8 +84,6 @@ A `$(home)` icon in the status bar provides one-click access to your Home page.
 Each artifact opens in a new tab by default. Configure with `aimaxViewer.panels.multiTab`.
 
 ### 9. Content Security Policy (CSP) for CDN Resources
-
-**New in v0.1.3** - Support for external CDN resources (Google Fonts, Chart.js, etc.)
 
 By default, the viewer uses **permissive mode** allowing common CDN domains:
 - `fonts.googleapis.com` / `fonts.gstatic.com` - Google Fonts
@@ -144,17 +140,24 @@ vscode://aimax.aimax-viewer/openHome
 
 ## Installation
 
-### From VSIX
+### Quick Install (Recommended)
 
-1. Build and package:
-   ```bash
-   npm run compile
-   npx vsce package --allow-missing-repository
-   ```
+1. Download the latest `.vsix` from [Releases](https://github.com/maxturazzini/aimax-viewer/releases)
+2. In VS Code: `Cmd+Shift+P` (macOS) or `Ctrl+Shift+P` (Windows/Linux)
+3. Type "Extensions: Install from VSIX..." and select the downloaded file
+4. Reload VS Code
 
-2. Install in VS Code:
-   - `Cmd+Shift+P` → "Extensions: Install from VSIX..."
-   - Select the `.vsix` file
+### Build from Source (Developers)
+
+```bash
+git clone https://github.com/maxturazzini/aimax-viewer.git
+cd aimax-viewer
+npm install
+npm run compile
+npx vsce package --allow-missing-repository
+```
+
+Then install the generated `.vsix` file as above.
 
 ## Configuration
 
