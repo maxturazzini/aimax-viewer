@@ -56,7 +56,7 @@ Configure multiple artifact folders via `aimaxViewer.browser.folders`. Each fold
 ```json
 {
   "aimaxViewer.browser.folders": [
-    { "label": "Artifacts", "path": "projects/Artifacts" },
+    { "label": "Artifacts", "path": "Artifacts" },
     { "label": "Reports", "path": "reports" }
   ]
 }
@@ -75,7 +75,7 @@ Markdown files (`.md`) are automatically converted to HTML when served. Supporte
 - Horizontal rules
 - Code blocks (inline)
 
-Just create a `.md` file in `projects/Artifacts/` and it will appear in the dropdown with the 📝 icon.
+Just create a `.md` file in `Artifacts/` and it will appear in the dropdown with the 📝 icon.
 
 ### 7. Status Bar Quick Access
 
@@ -161,7 +161,7 @@ vscode://aimax.aimax-viewer/openHome
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `aimaxViewer.startup.mode` | `"home"` | What to open at startup: `home`, `browser`, or `none` |
-| `aimaxViewer.startup.homePage` | `"projects/Artifacts/index.html"` | Path to home page file |
+| `aimaxViewer.startup.homePage` | `"Artifacts/index.html"` | Path to home page file |
 | `aimaxViewer.server.port` | `3124` | HTTP server port |
 | `aimaxViewer.panels.multiTab` | `true` | Open each artifact in new tab |
 | `aimaxViewer.csp.mode` | `"permissive"` | CSP mode: `strict`, `permissive`, `custom` |
@@ -195,12 +195,12 @@ AIMax Viewer exposes commands via `vscode://` URI protocol, enabling any AI agen
 
 **1. Show an HTML artifact:**
 ```bash
-open "vscode://aimax.aimax-viewer/openBrowser?http://127.0.0.1:3124/projects/Artifacts/2026-01-10_report.html"
+open "vscode://aimax.aimax-viewer/openBrowser?http://127.0.0.1:3124/Artifacts/2026-01-10_report.html"
 ```
 
 **2. Show a Markdown file (auto-converted to HTML):**
 ```bash
-open "vscode://aimax.aimax-viewer/openBrowser?http://127.0.0.1:3124/projects/Artifacts/analysis.md"
+open "vscode://aimax.aimax-viewer/openBrowser?http://127.0.0.1:3124/Artifacts/analysis.md"
 ```
 
 **3. Show a local dev server:**
@@ -215,7 +215,7 @@ Add to your project's `CLAUDE.md`:
 ```markdown
 ## Artifact Viewer
 
-When creating HTML or MD files in `projects/Artifacts/`, display them with:
+When creating HTML or MD files in `Artifacts/`, display them with:
 
 \`\`\`bash
 open "vscode://aimax.aimax-viewer/openBrowser?http://127.0.0.1:3124/<file-path>"
@@ -228,7 +228,7 @@ open "vscode://aimax.aimax-viewer/openBrowser?http://127.0.0.1:3124/<file-path>"
 
 ## Example index.html
 
-A generic example is provided in `example/index.html`. Copy it to your `projects/Artifacts/` folder to get started.
+A generic example is provided in `example/index.html`. Copy it to your `Artifacts/` folder to get started.
 
 ## Toolbar Buttons
 
@@ -245,7 +245,7 @@ A generic example is provided in `example/index.html`. Copy it to your `projects
 ## Requirements
 
 - VS Code 1.80.0+
-- Workspace with `projects/Artifacts/` folder
+- Workspace with `Artifacts/` folder
 
 ## License
 

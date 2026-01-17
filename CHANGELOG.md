@@ -7,10 +7,10 @@ All notable changes to the AIMax Viewer extension will be documented in this fil
 ### Added
 - **Favicon in Toolbar**: Replaced "AI, MAX" text with clickable favicon icon
 - **Back/Forward Navigation**: Added ← → buttons for session history navigation
-- **Fallback Setup Page**: Shows setup instructions when `projects/Artifacts/` folder not found
+- **Fallback Setup Page**: Shows setup instructions when `Artifacts/` folder not found
 
 ### Changed
-- **Workspace Detection**: Extension now searches up parent directories to find `projects/Artifacts/`
+- **Workspace Detection**: Extension now searches up parent directories to find `Artifacts/`
 - **History Tracking**: Tracks navigation via dropdown AND iframe internal links
 
 ### Fixed

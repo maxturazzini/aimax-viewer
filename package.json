@@ -129,7 +129,7 @@
         },
         "aimaxViewer.startup.homePage": {
           "type": "string",
-          "default": "projects/Artifacts/index.html",
+          "default": "Artifacts/index.html",
           "description": "Relative path to the home page file (from workspace root)"
         },
         "aimaxViewer.console.openByDefault": {
@@ -182,7 +182,7 @@
           "default": [
             {
               "label": "Artifacts",
-              "path": "projects/Artifacts"
+              "path": "Artifacts"
             }
           ],
           "items": {

@@ -41,7 +41,7 @@ export function startHttpServer(workspaceFolder: string, serverPort: number): vo
 
         // API endpoint: list artifact files
         if (url === '/api/artifacts') {
-            const artifactsPath = path.join(workspaceFolder, 'projects/Artifacts');
+            const artifactsPath = path.join(workspaceFolder, 'Artifacts');
             listArtifactFiles(artifactsPath, workspaceFolder, currentServerPort).then(files => {
                 res.writeHead(200, {
                     'Content-Type': 'application/json',

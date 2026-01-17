@@ -128,7 +128,7 @@
         <div class="card warning">
             <div class="icon">&#9888;</div>
             <h2>Artifacts Folder Not Found</h2>
-            <p>AIMax Viewer looks for a <code>projects/Artifacts/</code> folder in your workspace to display HTML artifacts. This folder was not found in the current workspace or any parent directory.</p>
+            <p>AIMax Viewer looks for a <code>Artifacts/</code> folder in your workspace to display HTML artifacts. This folder was not found in the current workspace or any parent directory.</p>
         </div>
 
         <div class="card">
@@ -141,7 +141,7 @@
                     <div class="step-content">
                         <h3>Create the folder structure</h3>
                         <p>In your workspace root, create the following folders:</p>
-                        <pre><code>mkdir -p projects/Artifacts</code></pre>
+                        <pre><code>mkdir -p Artifacts</code></pre>
                     </div>
                 </div>
 
@@ -150,7 +150,7 @@
                     <div class="step-content">
                         <h3>Create an index.html file</h3>
                         <p>Create a home page for your artifacts dashboard:</p>
-                        <pre><code>projects/Artifacts/index.html</code></pre>
+                        <pre><code>Artifacts/index.html</code></pre>
                     </div>
                 </div>
 
@@ -193,7 +193,7 @@
         <div class="card">
             <h2>How It Works</h2>
             <ul>
-                <li><strong>Artifacts folder:</strong> Place your HTML files in <code>projects/Artifacts/</code></li>
+                <li><strong>Artifacts folder:</strong> Place your HTML files in <code>Artifacts/</code></li>
                 <li><strong>Auto-discovery:</strong> All HTML files are listed in the toolbar dropdown</li>
                 <li><strong>Sorted by date:</strong> Newest files appear first</li>
                 <li><strong>Home page:</strong> <code>index.html</code> is your dashboard landing page</li>
@@ -203,7 +203,7 @@
         <div class="card">
             <h2>AI Agent Integration</h2>
             <p>When AI agents (like Claude Code) create HTML artifacts, they can open them directly in the viewer:</p>
-            <pre><code>open "vscode://aimax.aimax-viewer/openBrowser?http://127.0.0.1:3124/projects/Artifacts/my-artifact.html"</code></pre>
+            <pre><code>open "vscode://aimax.aimax-viewer/openBrowser?http://127.0.0.1:3124/Artifacts/my-artifact.html"</code></pre>
             <p style="margin-top: 12px;">This opens the artifact inside VS Code with the full toolbar (reload, navigation, dropdown selector).</p>
         </div>
 

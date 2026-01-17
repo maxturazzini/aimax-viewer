@@ -39,7 +39,7 @@ function getConfig() {
     return {
         serverPort: config.get<number>('server.port', 3124),
         startupMode: config.get<string>('startup.mode', 'home'),
-        homePage: config.get<string>('startup.homePage', 'projects/Artifacts/index.html'),
+        homePage: config.get<string>('startup.homePage', 'Artifacts/index.html'),
         consoleOpenByDefault: config.get<boolean>('console.openByDefault', false),
         enableJavaScript: config.get<boolean>('webview.enableJavaScript', true),
         multiTab: config.get<boolean>('panels.multiTab', true),
@@ -53,7 +53,7 @@ function getConfig() {
         ]),
         browserLayout: config.get<string>('browser.layout', 'sidebar'),
         browserFolders: config.get<FolderConfig[]>('browser.folders', [
-            { label: 'Artifacts', path: 'projects/Artifacts' }
+            { label: 'Artifacts', path: 'Artifacts' }
         ])
     };
 }
@@ -74,13 +74,13 @@ function generateCSP(): string {
     return `default-src 'self' http://127.0.0.1:* http://localhost:*; script-src 'self' 'unsafe-inline' http://127.0.0.1:* http://localhost:* ${httpsScheme}; style-src 'self' 'unsafe-inline' http://127.0.0.1:* http://localhost:* ${httpsScheme}; img-src 'self' data: http://127.0.0.1:* http://localhost:* ${httpsScheme}; font-src 'self' data: http://127.0.0.1:* http://localhost:* ${httpsScheme}; connect-src 'self' http://127.0.0.1:* http://localhost:* ${httpsScheme};`;
 }
 
-// Find workspace root by looking for projects/Artifacts directory
+// Find workspace root by looking for Artifacts directory
 function findWorkspaceRoot(startPath: string): string | undefined {
     let currentPath = startPath;
     const maxLevels = 10; // Safety limit
 
     for (let i = 0; i < maxLevels; i++) {
-        const artifactsPath = path.join(currentPath, 'projects', 'Artifacts');
+        const artifactsPath = path.join(currentPath, 'Artifacts');
         if (fs.existsSync(artifactsPath)) {
             console.log('[AIMax] Found workspace root at:', currentPath);
             return currentPath;
@@ -103,7 +103,7 @@ export function activate(context: vscode.ExtensionContext) {
     const vsCodeWorkspace = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     console.log('[AIMax] VS Code workspace:', vsCodeWorkspace);
 
-    // Find the actual workspace root (where projects/Artifacts exists)
+    // Find the actual workspace root (where Artifacts exists)
     const workspaceFolder = vsCodeWorkspace ? findWorkspaceRoot(vsCodeWorkspace) : undefined;
     console.log('[AIMax] Resolved workspace folder:', workspaceFolder);
 
@@ -154,7 +154,7 @@ export function activate(context: vscode.ExtensionContext) {
     if (config.startupMode !== 'none') {
         console.log('[AIMax] Startup mode:', config.startupMode);
         if (workspaceFolder) {
-            // Normal mode: workspace has projects/Artifacts
+            // Normal mode: workspace has Artifacts
             if (config.startupMode === 'home') {
                 openArtifactsHome(workspaceFolder, config.homePage);
             } else if (config.startupMode === 'browser') {
@@ -163,7 +163,7 @@ export function activate(context: vscode.ExtensionContext) {
             }
         } else {
             // Fallback mode: show setup instructions from extension's example/index.html
-            console.log('[AIMax] No projects/Artifacts found - showing setup instructions');
+            console.log('[AIMax] No Artifacts found - showing setup instructions');
             openSetupInstructions();
         }
     } else {
@@ -267,7 +267,7 @@ export function activate(context: vscode.ExtensionContext) {
         if (workspaceFolder) {
             const cfg = getConfig();
             // Open the artifacts index via HTTP server
-            const artifactsUrl = `http://127.0.0.1:${cfg.serverPort}/projects/Artifacts/index.html`;
+            const artifactsUrl = `http://127.0.0.1:${cfg.serverPort}/Artifacts/index.html`;
             openInBrowser(artifactsUrl, 'Artifacts Browser');
         }
     });
@@ -697,7 +697,7 @@ function getBrowserHtml(url: string, title: string, faviconUri: string): string 
                 const artifacts = await response.json();
 
                 artifactSelect.innerHTML = '<option value="">📁 Select an Artifact...</option>';
-                artifactSelect.innerHTML += '<option value="http://127.0.0.1:${serverPort}/projects/Artifacts/index.html">🏠 Home (index.html)</option>';
+                artifactSelect.innerHTML += '<option value="http://127.0.0.1:${serverPort}/Artifacts/index.html">🏠 Home (index.html)</option>';
 
                 // Group artifacts by folderLabel
                 const grouped = {};
@@ -769,7 +769,7 @@ function getBrowserHtml(url: string, title: string, faviconUri: string): string 
         }
 
         function goHome() {
-            const homeUrl = 'http://127.0.0.1:${serverPort}/projects/Artifacts/index.html';
+            const homeUrl = 'http://127.0.0.1:${serverPort}/Artifacts/index.html';
             navigateToUrl(homeUrl, true);
             artifactSelect.value = homeUrl;
             toggleMenu();
@@ -1027,7 +1027,7 @@ async function listArtifactFiles(
 }
 
 // Open home page with link handler (reads file directly, intercepts clicks)
-function openArtifactsHome(workspaceFolder: string, homePage: string = 'projects/Artifacts/index.html') {
+function openArtifactsHome(workspaceFolder: string, homePage: string = 'Artifacts/index.html') {
     const indexPath = path.join(workspaceFolder, homePage);
 
     if (!fs.existsSync(indexPath)) {
@@ -1267,13 +1267,13 @@ function wrapWithToolbarAndLinkHandler(html: string, title: string, faviconUri: 
     return result;
 }
 
-// Show setup instructions when projects/Artifacts folder is not found
+// Show setup instructions when Artifacts folder is not found
 function openSetupInstructions() {
     const examplePath = path.join(extensionContext.extensionPath, 'example', 'index.html');
 
     if (!fs.existsSync(examplePath)) {
         console.log('[AIMax] Example file not found:', examplePath);
-        vscode.window.showWarningMessage('AIMax Viewer: Setup instructions not found. Please create projects/Artifacts/ folder in your workspace.');
+        vscode.window.showWarningMessage('AIMax Viewer: Setup instructions not found. Please create Artifacts/ folder in your workspace.');
         return;
     }
 

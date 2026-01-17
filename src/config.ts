@@ -16,7 +16,7 @@ export function getConfig(): AimaxConfig {
     return {
         serverPort: config.get<number>('server.port', 3124),
         startupMode: config.get<string>('startup.mode', 'home'),
-        homePage: config.get<string>('startup.homePage', 'projects/Artifacts/index.html'),
+        homePage: config.get<string>('startup.homePage', 'Artifacts/index.html'),
         consoleOpenByDefault: config.get<boolean>('console.openByDefault', false),
         enableJavaScript: config.get<boolean>('webview.enableJavaScript', true),
         multiTab: config.get<boolean>('panels.multiTab', true),

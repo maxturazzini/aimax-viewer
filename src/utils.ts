@@ -1,13 +1,13 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
-// Find workspace root by looking for projects/Artifacts directory
+// Find workspace root by looking for Artifacts directory
 export function findWorkspaceRoot(startPath: string): string | undefined {
     let currentPath = startPath;
     const maxLevels = 10;
 
     for (let i = 0; i < maxLevels; i++) {
-        const artifactsPath = path.join(currentPath, 'projects', 'Artifacts');
+        const artifactsPath = path.join(currentPath, 'Artifacts');
         if (fs.existsSync(artifactsPath)) {
             console.log('[AIMax] Found workspace root at:', currentPath);
             return currentPath;
