@@ -121,16 +121,30 @@ git push origin main
 
 ### 5. Create GitHub Release
 ```bash
-# Create tag
+# IMPORTANT: Ensure correct account is active
+gh auth switch --user maxturazzini
+
+# Create and push tag
 git tag vX.Y.Z
 git push origin vX.Y.Z
 
-# Or via GitHub UI:
-# 1. Go to https://github.com/maxturazzini/aimax-viewer/releases
-# 2. Click "Draft a new release"
-# 3. Tag: vX.Y.Z
-# 4. Title: vX.Y.Z
-# 5. Description: copy from CHANGELOG.md
-# 6. Attach the .vsix file
-# 7. Publish release
+# Create release with vsix attachment
+gh release create vX.Y.Z aimax-viewer-X.Y.Z.vsix \
+  --repo maxturazzini/aimax-viewer \
+  --title "vX.Y.Z" \
+  --notes "Copy from CHANGELOG.md"
 ```
+
+## Git Remote Configuration
+
+This repo uses SSH with multi-account setup:
+```bash
+# Remote must use github.com-maxtura (SSH alias for maxturazzini key)
+git remote set-url origin git@github.com-maxtura:maxturazzini/aimax-viewer.git
+
+# Verify
+git remote -v
+# Should show: git@github.com-maxtura:maxturazzini/aimax-viewer.git
+```
+
+SSH config (`~/.ssh/config`) maps `github.com-maxtura` to `~/.ssh/id_ed25519_maxturazzini`.
