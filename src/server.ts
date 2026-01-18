@@ -2,7 +2,7 @@ import * as http from 'http';
 import * as fs from 'fs';
 import * as path from 'path';
 import { listArtifactFiles } from './utils';
-import { parseMarkdown, wrapMarkdownHtml } from './markdown-parser';
+import { parseMarkdown, wrapMarkdownHtml, extractFrontmatter } from './markdown-parser';
 
 let httpServer: http.Server | undefined;
 let currentServerPort: number;
@@ -76,9 +76,10 @@ export function startHttpServer(workspaceFolder: string, serverPort: number): vo
         // Handle Markdown files: convert to HTML
         if (ext === '.md' || ext === '.markdown') {
             try {
-                const content = fs.readFileSync(filePath, 'utf-8');
-                const title = path.basename(filePath, ext).replace(/_/g, ' ');
-                const html = wrapMarkdownHtml(parseMarkdown(content), title);
+                const rawContent = fs.readFileSync(filePath, 'utf-8');
+                const { content, metadata } = extractFrontmatter(rawContent);
+                const title = (metadata?.title as string) || path.basename(filePath, ext).replace(/_/g, ' ');
+                const html = wrapMarkdownHtml(parseMarkdown(content), title, metadata);
                 res.writeHead(200, {
                     'Content-Type': 'text/html; charset=utf-8',
                     'Access-Control-Allow-Origin': '*'

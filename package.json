@@ -2,7 +2,7 @@
   "name": "aimax-viewer",
   "displayName": "AIMax Viewer",
   "description": "Auto-open Artifacts at startup + internal browser for localhost",
-  "version": "0.1.16",
+  "version": "0.1.17",
   "publisher": "aimax",
   "icon": "icon.png",
   "repository": {
@@ -37,10 +37,6 @@
       {
         "command": "aimaxViewer.openFileInViewer",
         "title": "Open in AIMax Viewer"
-      },
-      {
-        "command": "aimaxViewer.copyViewerState",
-        "title": "AIMax Viewer: Copy State for Claude"
       },
       {
         "command": "aimaxViewer.openTerminal",

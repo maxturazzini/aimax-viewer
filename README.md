@@ -3,7 +3,7 @@
 VS Code extension that provides automatic HTML/Markdown viewing at startup and an internal browser for localhost development.
 
 ![VS Code Marketplace](https://img.shields.io/badge/VS%20Code-1.80+-blue)
-![Version](https://img.shields.io/badge/version-0.1.16-green)
+![Version](https://img.shields.io/badge/version-0.1.17-green)
 ![License](https://img.shields.io/badge/license-MIT-brightgreen)
 
 ## Why use AIMax Viewer instead of external browser?
@@ -215,23 +215,18 @@ open "vscode://aimax.aimax-viewer/openBrowser?http://localhost:5173"
 
 Add to your project's `CLAUDE.md`:
 
-```markdown
-## Artifact Viewer
+> **Artifact Viewer**
+>
+> When creating HTML or MD files in Artifacts/, display them with:
+> `open "vscode://aimax.aimax-viewer/openBrowser?http://127.0.0.1:3124/Artifacts/<filename>"`
+>
+> Naming convention: `YYYY-MM-DD_descriptive-slug.html` or `.md`
+>
+> **IMPORTANT**: Never use external browser - always use vscode:// protocol.
 
-When creating HTML or MD files in `Artifacts/`, display them with:
+## Getting Started
 
-\`\`\`bash
-open "vscode://aimax.aimax-viewer/openBrowser?http://127.0.0.1:3124/<file-path>"
-\`\`\`
-
-**Naming convention**: `YYYY-MM-DD_descriptive-slug.html` or `.md`
-
-**NEVER use** external browser (`open file.html`) - always use vscode:// protocol.
-```
-
-## Example index.html
-
-A generic example is provided in `example/index.html`. Copy it to your `Artifacts/` folder to get started.
+Create an `Artifacts/` folder in your workspace with an `index.html` file. Check the guides in `Artifacts/guide_en.md` and `Artifacts/guide_it.md` for detailed documentation.
 
 ## Toolbar Buttons
 

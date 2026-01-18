@@ -2,10 +2,31 @@
 
 All notable changes to the AIMax Viewer extension will be documented in this file.
 
+## [0.1.17] - 2026-01-18
+
+### Added
+- **YAML Metadata in Info Popup**: (i) button now displays frontmatter metadata from markdown files via postMessage API
+- **Copy Button for Code Blocks**: Code blocks have a copy button with light gray background styling
+- **Documentation Guides**: Comprehensive guides in English (`guide_en.md`) and Italian (`guide_it.md`)
+- **Smart Port Management**: Default port 3124 uses hash-based calculation to avoid conflicts between VS Code windows; custom port values are fixed
+
+### Fixed
+- **Code Block Rendering**: Fixed issue where code blocks were rendered line-by-line instead of as single blocks
+- **Cross-Origin Metadata**: Resolved iframe cross-origin restriction preventing YAML metadata display in toolbar
+
+### Changed
+- **Markdown Parser**: Improved code block handling with escape sequences and syntax highlighting
+- **Default Folder**: Simplified to `Artifacts/` only
+
+### Technical
+- postMessage API for secure cross-origin iframe communication
+- Code block placeholder technique (`<!--CODEBLOCK-->`) during markdown processing
+
+---
+
 ## [0.1.1] - 2026-01-04
 
 ### Added
-- **Favicon in Toolbar**: Replaced "AI, MAX" text with clickable favicon icon
 - **Back/Forward Navigation**: Added ← → buttons for session history navigation
 - **Fallback Setup Page**: Shows setup instructions when `Artifacts/` folder not found
 

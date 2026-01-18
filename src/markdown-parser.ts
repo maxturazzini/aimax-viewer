@@ -1,5 +1,98 @@
 // Simple Markdown to HTML parser
 
+// Frontmatter extraction result interface
+export interface FrontmatterResult {
+    content: string;      // Markdown without frontmatter
+    metadata: Record<string, unknown> | null;
+}
+
+// Extract YAML frontmatter from markdown
+export function extractFrontmatter(md: string): FrontmatterResult {
+    // Remove BOM if present
+    let content = md.replace(/^\uFEFF/, '');
+
+    // Normalize line endings to \n
+    content = content.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+
+    // More flexible regex: matches frontmatter at start of file
+    // Allows for optional trailing newline after closing ---
+    const frontmatterRegex = /^---\n([\s\S]*?)\n---(?:\n|$)/;
+    const match = content.match(frontmatterRegex);
+
+    if (!match) {
+        return { content: content, metadata: null };
+    }
+
+    // Parse YAML (key: value pairs, including multi-line values)
+    const yamlBlock = match[1];
+    const metadata: Record<string, unknown> = {};
+    const lines = yamlBlock.split('\n');
+
+    let currentKey: string | null = null;
+    let currentValue: string[] = [];
+
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+
+        // Check if this is a new key: value pair (starts with non-space, has colon)
+        const keyMatch = line.match(/^([a-zA-Z0-9_-]+):\s*(.*)/);
+
+        if (keyMatch) {
+            // Save previous key if exists
+            if (currentKey) {
+                metadata[currentKey] = parseYamlValue(currentValue.join('\n'));
+            }
+
+            currentKey = keyMatch[1];
+            currentValue = keyMatch[2] ? [keyMatch[2]] : [];
+        } else if (currentKey && (line.startsWith('  ') || line.startsWith('\t') || line.trim() === '')) {
+            // Continuation of multi-line value
+            currentValue.push(line.trim());
+        }
+    }
+
+    // Don't forget the last key
+    if (currentKey) {
+        metadata[currentKey] = parseYamlValue(currentValue.join('\n'));
+    }
+
+    return {
+        content: content.slice(match[0].length),
+        metadata: Object.keys(metadata).length > 0 ? metadata : null
+    };
+}
+
+// Parse YAML value (handles strings, arrays, numbers, booleans)
+function parseYamlValue(value: string): unknown {
+    const trimmed = value.trim();
+
+    // Empty value
+    if (!trimmed) return '';
+
+    // Array [a, b, c]
+    if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+        return trimmed.slice(1, -1).split(',').map(v => v.trim().replace(/^["']|["']$/g, ''));
+    }
+
+    // Quoted string
+    if ((trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+        (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
+        return trimmed.slice(1, -1);
+    }
+
+    // Boolean
+    if (trimmed.toLowerCase() === 'true') return true;
+    if (trimmed.toLowerCase() === 'false') return false;
+
+    // Number
+    if (/^-?\d+(\.\d+)?$/.test(trimmed)) {
+        return parseFloat(trimmed);
+    }
+
+    // Plain string (possibly multi-line)
+    return trimmed;
+}
+
 // Apply inline formatting to text (for use in table cells)
 function formatInline(text: string): string {
     return text
@@ -39,7 +132,27 @@ function parseTable(md: string): string {
 }
 
 export function parseMarkdown(md: string): string {
+    // Normalize line endings first
+    md = md.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+
     md = md.replace(/\n{3,}/g, '\n\n<!--SPACER-->\n\n');
+
+    // Fenced code blocks (```lang ... ```) - must be processed FIRST
+    // Use a placeholder to protect code blocks from further processing
+    const codeBlocks: string[] = [];
+    md = md.replace(/```(\w*)\n([\s\S]*?)\n```/g, (_match, lang, code) => {
+        const escaped = code
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+        const langClass = lang ? ` class="language-${lang}"` : '';
+        const copyIcon = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>';
+        const html = `<div class="code-block-wrapper"><button class="copy-btn" onclick="copyCode(this)" title="Copy code">${copyIcon}</button><pre><code${langClass}>${escaped}</code></pre></div>`;
+        codeBlocks.push(html);
+        return `<!--CODEBLOCK${codeBlocks.length - 1}-->`;
+    });
+
     let html = parseTable(md);
 
     html = html
@@ -81,16 +194,27 @@ export function parseMarkdown(md: string): string {
         .replace(/<!--SPACER-->/g, '<div style="height: 1.5em;"></div>')
         .replace(/<p><!--SPACER--><\/p>/g, '<div style="height: 1.5em;"></div>');
 
+    // Restore code blocks from placeholders
+    codeBlocks.forEach((block, i) => {
+        html = html.replace(`<!--CODEBLOCK${i}-->`, block);
+        html = html.replace(`<p><!--CODEBLOCK${i}--></p>`, block);
+    });
+
     return html;
 }
 
-export function wrapMarkdownHtml(content: string, title: string): string {
+export function wrapMarkdownHtml(content: string, title: string, metadata?: Record<string, unknown> | null): string {
+    const metadataScript = metadata
+        ? `<script id="frontmatter" type="application/json">${JSON.stringify(metadata)}</script>`
+        : '';
+
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>${title}</title>
+    ${metadataScript}
     <style>
         :root {
             --blue: #0052FF;
@@ -235,6 +359,52 @@ export function wrapMarkdownHtml(content: string, title: string): string {
             color: var(--dark);
         }
 
+        .content-section .code-block-wrapper {
+            position: relative;
+            margin: 16px 0;
+        }
+
+        .content-section .code-block-wrapper .copy-btn {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            background: rgba(0,0,0,0.1);
+            border: 1px solid rgba(0,0,0,0.15);
+            border-radius: 4px;
+            padding: 4px 8px;
+            font-size: 11px;
+            color: var(--dim-gray);
+            cursor: pointer;
+            opacity: 0;
+            transition: opacity 0.2s;
+        }
+
+        .content-section .code-block-wrapper:hover .copy-btn {
+            opacity: 1;
+        }
+
+        .content-section .code-block-wrapper .copy-btn:hover {
+            background: rgba(0,0,0,0.15);
+        }
+
+        .content-section pre {
+            background: var(--light-gray);
+            border-radius: 8px;
+            padding: 16px 20px;
+            margin: 0;
+            overflow-x: auto;
+            border: 1px solid rgba(0,0,0,0.08);
+        }
+
+        .content-section pre code {
+            background: transparent;
+            padding: 0;
+            color: var(--dark);
+            font-size: 13px;
+            line-height: 1.5;
+            white-space: pre;
+        }
+
         .content-section blockquote {
             border-left: 4px solid var(--blue);
             padding: 12px 20px;
@@ -277,12 +447,70 @@ export function wrapMarkdownHtml(content: string, title: string): string {
                 padding: 20px 16px;
             }
         }
+
+        @media print {
+            body {
+                background: white;
+                -webkit-print-color-adjust: exact;
+                print-color-adjust: exact;
+            }
+            .content-section {
+                max-width: 100%;
+                padding: 20px;
+            }
+        }
     </style>
 </head>
 <body>
     <div class="content-section">
         ${content}
     </div>
+    <script>
+        const copyIconSvg = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>';
+        const checkIconSvg = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="3"><path d="M20 6L9 17l-5-5"/></svg>';
+        function copyCode(btn) {
+            const code = btn.parentElement.querySelector('code').textContent;
+
+            const showSuccess = () => {
+                btn.innerHTML = checkIconSvg;
+                btn.title = 'Copied!';
+                setTimeout(() => { btn.innerHTML = copyIconSvg; btn.title = 'Copy code'; }, 2000);
+            };
+
+            const fallbackCopy = () => {
+                const textarea = document.createElement('textarea');
+                textarea.value = code;
+                textarea.style.cssText = 'position:fixed;top:0;left:0;opacity:0;pointer-events:none;';
+                document.body.appendChild(textarea);
+                textarea.focus();
+                textarea.select();
+                const success = document.execCommand('copy');
+                document.body.removeChild(textarea);
+                return success;
+            };
+
+            // Try clipboard API, fall back to execCommand
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(code)
+                    .then(showSuccess)
+                    .catch(() => {
+                        // Clipboard API failed, try fallback
+                        if (fallbackCopy()) showSuccess();
+                    });
+            } else {
+                // No clipboard API, use fallback directly
+                if (fallbackCopy()) showSuccess();
+            }
+        }
+
+        // Post metadata to parent window (for AIMax Viewer toolbar)
+        if (window.parent !== window) {
+            window.parent.postMessage({
+                type: 'aimaxMetadata',
+                metadata: ${JSON.stringify(metadata || {})}
+            }, '*');
+        }
+    </script>
 </body>
 </html>`;
 }

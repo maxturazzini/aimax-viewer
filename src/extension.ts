@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as http from 'http';
-import { parseMarkdown, wrapMarkdownHtml } from './markdown-parser';
+import { parseMarkdown, wrapMarkdownHtml, extractFrontmatter } from './markdown-parser';
 import { ArtifactsTreeProvider, ArtifactItem, FolderConfig } from './treeview-provider';
 
 let browserPanel: vscode.WebviewPanel | undefined;
@@ -12,26 +12,6 @@ let serverPort = 3124;
 let extensionContext: vscode.ExtensionContext;
 let treeProvider: ArtifactsTreeProvider | undefined;
 
-// Track current viewer state
-let currentViewerState: {
-    url: string;
-    title: string;
-    panel: 'browser' | 'home';
-    timestamp: string;
-} | undefined;
-
-function getCurrentViewerState() {
-    return currentViewerState;
-}
-
-function updateViewerState(url: string, title: string, panel: 'browser' | 'home') {
-    currentViewerState = {
-        url,
-        title,
-        panel,
-        timestamp: new Date().toISOString()
-    };
-}
 
 // Settings
 function getConfig() {
@@ -109,11 +89,27 @@ export function activate(context: vscode.ExtensionContext) {
 
     const config = getConfig();
     console.log('[AIMax] Config:', JSON.stringify(config));
-    serverPort = config.serverPort;
+
+    // Port logic:
+    // - If user set custom port (different from default 3124) → use fixed port
+    // - If default (3124) → calculate unique port based on workspace hash to avoid conflicts
+    const DEFAULT_PORT = 3124;
+    if (config.serverPort !== DEFAULT_PORT) {
+        // User explicitly set a custom port - use it as-is
+        serverPort = config.serverPort;
+        console.log('[AIMax] Using custom fixed port:', serverPort);
+    } else if (workspaceFolder) {
+        // Default port + workspace: calculate unique port to avoid conflicts between windows
+        const hash = workspaceFolder.split('').reduce((a, b) => ((a << 5) - a) + b.charCodeAt(0), 0);
+        serverPort = DEFAULT_PORT + (Math.abs(hash) % 100); // Range: 3124-3223
+        console.log('[AIMax] Calculated port for workspace:', serverPort);
+    } else {
+        serverPort = DEFAULT_PORT;
+    }
 
     // Start our HTTP server for serving local files (only if workspace found)
     if (workspaceFolder) {
-        console.log('[AIMax] Starting HTTP server...');
+        console.log('[AIMax] Starting HTTP server on port', serverPort);
         startHttpServer(workspaceFolder);
     }
 
@@ -158,7 +154,7 @@ export function activate(context: vscode.ExtensionContext) {
             if (config.startupMode === 'home') {
                 openArtifactsHome(workspaceFolder, config.homePage);
             } else if (config.startupMode === 'browser') {
-                const artifactsUrl = `http://127.0.0.1:${config.serverPort}/${config.homePage}`;
+                const artifactsUrl = `http://127.0.0.1:${serverPort}/${config.homePage}`;
                 openInBrowser(artifactsUrl, 'Artifacts Browser');
             }
         } else {
@@ -235,22 +231,6 @@ export function activate(context: vscode.ExtensionContext) {
         }
     });
 
-    // Copy viewer state for Claude
-    const copyViewerStateCommand = vscode.commands.registerCommand('aimaxViewer.copyViewerState', async () => {
-        const state = getCurrentViewerState();
-        if (state) {
-            const stateText = `**AIMax Viewer State**
-- URL: ${state.url}
-- Title: ${state.title}
-- Panel: ${state.panel}
-- Timestamp: ${state.timestamp}`;
-            await vscode.env.clipboard.writeText(stateText);
-            vscode.window.showInformationMessage('Viewer state copied to clipboard');
-        } else {
-            vscode.window.showWarningMessage('No viewer panel is currently open');
-        }
-    });
-
     // Command: Open new terminal
     const openTerminalCommand = vscode.commands.registerCommand('aimaxViewer.openTerminal', () => {
         vscode.commands.executeCommand('workbench.action.terminal.new');
@@ -300,7 +280,6 @@ export function activate(context: vscode.ExtensionContext) {
         openHomeCommand,
         openCurrentFileCommand,
         openFileInViewerCommand,
-        copyViewerStateCommand,
         openTerminalCommand,
         openClaudeCodeCommand,
         openArtifactsBrowserCommand,
@@ -358,8 +337,6 @@ function openInBrowser(url: string, customTitle?: string) {
                 newPanel.title = message.title;
             } else if (message.command === 'openCurrentFile') {
                 vscode.commands.executeCommand('aimaxViewer.openCurrentFile');
-            } else if (message.command === 'copyViewerState') {
-                vscode.commands.executeCommand('aimaxViewer.copyViewerState');
             } else if (message.command === 'openTerminal') {
                 vscode.commands.executeCommand('aimaxViewer.openTerminal');
             } else if (message.command === 'openClaudeCode') {
@@ -367,9 +344,9 @@ function openInBrowser(url: string, customTitle?: string) {
             }
         });
 
-        newPanel.webview.html = getBrowserHtml(url, pageTitle, faviconUri);
-        updateViewerState(url, pageTitle, 'browser');
-        return;
+        const showDropdown = config.browserLayout === 'top';
+        newPanel.webview.html = getBrowserHtml(url, pageTitle, faviconUri, showDropdown);
+                return;
     }
 
     // Single-tab mode: reuse browserPanel
@@ -401,8 +378,6 @@ function openInBrowser(url: string, customTitle?: string) {
                 }
             } else if (message.command === 'openCurrentFile') {
                 vscode.commands.executeCommand('aimaxViewer.openCurrentFile');
-            } else if (message.command === 'copyViewerState') {
-                vscode.commands.executeCommand('aimaxViewer.copyViewerState');
             } else if (message.command === 'openTerminal') {
                 vscode.commands.executeCommand('aimaxViewer.openTerminal');
             } else if (message.command === 'openClaudeCode') {
@@ -416,12 +391,13 @@ function openInBrowser(url: string, customTitle?: string) {
     const faviconUri = browserPanel.webview.asWebviewUri(faviconPath).toString();
 
     browserPanel.title = pageTitle;
-    browserPanel.webview.html = getBrowserHtml(url, pageTitle, faviconUri);
-    updateViewerState(url, pageTitle, 'browser');
-}
+    const showDropdown = config.browserLayout === 'top';
+    browserPanel.webview.html = getBrowserHtml(url, pageTitle, faviconUri, showDropdown);
+    }
 
-function getBrowserHtml(url: string, title: string, faviconUri: string): string {
+function getBrowserHtml(url: string, title: string, faviconUri: string, showDropdown: boolean = true): string {
     const csp = generateCSP();
+    const homePage = getConfig().homePage;
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -476,6 +452,15 @@ function getBrowserHtml(url: string, title: string, faviconUri: string): string 
             position: relative;
         }
         .select-wrapper:hover { background: #4c4c4c; }
+        .url-display {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            background: #3c3c3c;
+            border-radius: 4px;
+            padding: 0 4px;
+        }
         .artifact-select {
             flex: 1;
             background: transparent;
@@ -510,15 +495,18 @@ function getBrowserHtml(url: string, title: string, faviconUri: string): string 
             right: 0;
             background: #1e1e1e;
             border: 1px solid #3c3c3c;
-            border-radius: 4px;
-            padding: 6px 10px;
-            font-size: 11px;
-            font-family: monospace;
+            border-radius: 6px;
+            padding: 10px 14px;
+            font-size: 12px;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
             color: #cccccc;
-            white-space: nowrap;
+            white-space: normal;
+            min-width: 250px;
+            max-width: 400px;
             z-index: 100001;
             margin-top: 4px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+            line-height: 1.4;
         }
         .select-info-btn:hover .info-tooltip { display: block; }
         .title-badge {
@@ -598,6 +586,19 @@ function getBrowserHtml(url: string, title: string, faviconUri: string): string 
         }
         .error h2 { margin-bottom: 16px; color: #e06c75; }
         .error p { margin-bottom: 24px; opacity: 0.8; }
+
+        @media print {
+            .toolbar, .menu { display: none !important; }
+            iframe {
+                position: absolute;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: auto;
+                border: none;
+            }
+            body { height: auto; background: white; }
+        }
     </style>
 </head>
 <body>
@@ -605,6 +606,7 @@ function getBrowserHtml(url: string, title: string, faviconUri: string): string 
         <button class="nav-btn" id="backBtn" onclick="goBack()" title="Back" disabled>←</button>
         <button class="nav-btn" id="fwdBtn" onclick="goForward()" title="Forward" disabled>→</button>
         <button class="nav-btn" onclick="reload()" title="Reload">↻</button>
+        ${showDropdown ? `
         <div class="select-wrapper">
             <select class="artifact-select" id="artifactSelect" onchange="loadArtifact(this.value)">
                 <option value="">Loading artifacts...</option>
@@ -614,22 +616,30 @@ function getBrowserHtml(url: string, title: string, faviconUri: string): string 
                 <span class="info-tooltip" id="infoTooltip">${url}</span>
             </button>
         </div>
+        ` : `
+        <div class="url-display">
+            <button class="select-info-btn" id="infoBtn">
+                ⓘ
+                <span class="info-tooltip" id="infoTooltip">${url}</span>
+            </button>
+        </div>
+        `}
         <button class="toolbar-btn" onclick="openTerminal()" title="Open new terminal">
             <span style="color: #00d4ff; font-size: 14px;">&gt;</span>
         </button>
         <button class="toolbar-btn" onclick="openClaudeCode()" title="New Claude Code conversation">
-            <span style="color: #ff9500; font-size: 14px;">*</span>
+            <span style="color: #ff9500; font-size: 20px; line-height: 1;">*</span>
         </button>
         <button class="menu-btn" onclick="toggleMenu()">☰</button>
     </div>
     <div class="menu" id="menu">
         <button class="menu-item" onclick="reload()">Reload</button>
         <button class="menu-item" onclick="copyUrl()">Copy URL</button>
+        <!-- WIP: Export PDF disabled - needs VS Code file system API -->
         <button class="menu-item" onclick="openExternal()">Open in External Browser</button>
         <div class="menu-divider"></div>
         <button class="menu-item" onclick="goHome()">Go to Home</button>
         <button class="menu-item" onclick="openCurrentFile()">Open Current Editor File</button>
-        <button class="menu-item" onclick="copyViewerState()">Copy Viewer State</button>
     </div>
     <iframe id="frame" src="${url}" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox"></iframe>
 
@@ -685,9 +695,25 @@ function getBrowserHtml(url: string, title: string, faviconUri: string): string 
             vscode.postMessage({ command: 'updateTitle', title: title });
         }
 
-        // Update URL tooltip
+        // Update info tooltip with URL and optional metadata
+        function updateInfoTooltip(url, metadata) {
+            let html = '<div style="font-size: 11px; color: #888; word-break: break-all;">' + url + '</div>';
+
+            if (metadata && Object.keys(metadata).length > 0) {
+                html += '<div style="margin-top: 8px; border-top: 1px solid #444; padding-top: 8px;">';
+                for (const [key, value] of Object.entries(metadata)) {
+                    const displayValue = Array.isArray(value) ? value.join(', ') : value;
+                    html += '<div style="margin-bottom: 4px;"><strong style="color: #00d4ff;">' + key + ':</strong> ' + displayValue + '</div>';
+                }
+                html += '</div>';
+            }
+
+            infoTooltip.innerHTML = html;
+        }
+
+        // Legacy function for backward compatibility
         function updateUrlDisplay(url) {
-            infoTooltip.textContent = url;
+            updateInfoTooltip(url, null);
         }
 
         // Load artifacts list grouped by folder
@@ -763,25 +789,87 @@ function getBrowserHtml(url: string, title: string, faviconUri: string): string 
             toggleMenu();
         }
 
+        // Load html2pdf.js dynamically
+        let html2pdfLoaded = false;
+        function loadHtml2Pdf() {
+            return new Promise((resolve, reject) => {
+                if (html2pdfLoaded && window.html2pdf) {
+                    resolve(window.html2pdf);
+                    return;
+                }
+                const script = document.createElement('script');
+                script.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js';
+                script.onload = () => {
+                    html2pdfLoaded = true;
+                    resolve(window.html2pdf);
+                };
+                script.onerror = reject;
+                document.head.appendChild(script);
+            });
+        }
+
+        async function exportPdf() {
+            toggleMenu();
+            try {
+                // Show loading indicator
+                const loadingDiv = document.createElement('div');
+                loadingDiv.id = 'pdfLoading';
+                loadingDiv.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;z-index:999999;color:white;font-size:16px;';
+                loadingDiv.innerHTML = '<div style="text-align:center;"><div style="font-size:24px;margin-bottom:10px;">⏳</div>Generating PDF...</div>';
+                document.body.appendChild(loadingDiv);
+
+                // Load html2pdf.js if not already loaded
+                await loadHtml2Pdf();
+
+                // Get iframe content
+                const iframeDoc = frame.contentDocument || frame.contentWindow.document;
+                const content = iframeDoc.body.cloneNode(true);
+
+                // Get filename from URL
+                const fileName = currentUrl.split('/').pop()?.replace('.html', '').replace('.md', '') || 'artifact';
+
+                // Generate PDF with html2pdf.js
+                const opt = {
+                    margin: [10, 10, 10, 10],
+                    filename: fileName + '.pdf',
+                    image: { type: 'jpeg', quality: 0.98 },
+                    html2canvas: { scale: 2, useCORS: true, logging: false },
+                    jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
+                };
+
+                await window.html2pdf().set(opt).from(content).save();
+
+                // Remove loading indicator
+                document.body.removeChild(loadingDiv);
+            } catch (e) {
+                // Remove loading if exists
+                const loading = document.getElementById('pdfLoading');
+                if (loading) loading.remove();
+
+                console.log('[AIMax] PDF export failed, falling back to print dialog:', e);
+                // Fallback to print dialog
+                try {
+                    frame.contentWindow.print();
+                } catch (printErr) {
+                    vscode.postMessage({ command: 'openExternal', url: currentUrl });
+                }
+            }
+        }
+
         function openExternal() {
             vscode.postMessage({ command: 'openExternal', url: currentUrl });
             toggleMenu();
         }
 
         function goHome() {
-            const homeUrl = 'http://127.0.0.1:${serverPort}/Artifacts/index.html';
+            const homeUrl = 'http://127.0.0.1:${serverPort}/${homePage}';
             navigateToUrl(homeUrl, true);
-            artifactSelect.value = homeUrl;
+            if (artifactSelect) artifactSelect.value = homeUrl;
             toggleMenu();
         }
 
         function openCurrentFile() {
             vscode.postMessage({ command: 'openCurrentFile' });
-            toggleMenu();
-        }
-
-        function copyViewerState() {
-            vscode.postMessage({ command: 'copyViewerState' });
             toggleMenu();
         }
 
@@ -832,14 +920,25 @@ function getBrowserHtml(url: string, title: string, faviconUri: string): string 
                 if (iframeTitle) {
                     vscode.postMessage({ command: 'updateTitle', title: iframeTitle });
                 }
+
+                // Note: Metadata is received via postMessage from the iframe content
+                // (see message listener below)
             } catch (e) {
-                // Cross-origin, can't access URL/title
-                console.log('[AIMax Nav] ERROR accessing iframe:', e);
+                // Cross-origin - URL/title not accessible, but metadata still comes via postMessage
+                console.log('[AIMax Nav] Cross-origin iframe, waiting for postMessage');
             }
         };
 
+        // Listen for metadata from iframe content (postMessage from markdown pages)
+        window.addEventListener('message', (event) => {
+            if (event.data?.type === 'aimaxMetadata' && event.data.metadata) {
+                console.log('[AIMax] Received metadata via postMessage:', event.data.metadata);
+                updateInfoTooltip(currentUrl, event.data.metadata);
+            }
+        });
+
         // Initialize
-        loadArtifactsList();
+        ${showDropdown ? 'loadArtifactsList();' : '// Dropdown disabled - using sidebar navigation'}
 
         // Handle iframe load errors
         frame.onerror = function() {
@@ -932,9 +1031,10 @@ function startHttpServer(workspaceFolder: string) {
         // Handle Markdown files: convert to HTML
         if (ext === '.md' || ext === '.markdown') {
             try {
-                const content = fs.readFileSync(filePath, 'utf-8');
-                const title = path.basename(filePath, ext).replace(/_/g, ' ');
-                const html = wrapMarkdownHtml(parseMarkdown(content), title);
+                const rawContent = fs.readFileSync(filePath, 'utf-8');
+                const { content, metadata } = extractFrontmatter(rawContent);
+                const title = (metadata?.title as string) || path.basename(filePath, ext).replace(/_/g, ' ');
+                const html = wrapMarkdownHtml(parseMarkdown(content), title, metadata);
                 res.writeHead(200, {
                     'Content-Type': 'text/html; charset=utf-8',
                     'Access-Control-Allow-Origin': '*'
@@ -1101,9 +1201,7 @@ function openArtifactsHome(workspaceFolder: string, homePage: string = 'Artifact
     const faviconPath = vscode.Uri.joinPath(extensionContext.extensionUri, 'icon.png');
     const faviconUri = homePanel.webview.asWebviewUri(faviconPath).toString();
 
-    const httpUrl = getHttpUrl(indexPath, workspaceFolder);
     homePanel.webview.html = wrapWithToolbarAndLinkHandler(htmlContent, 'Artifacts Home', faviconUri);
-    updateViewerState(httpUrl, 'Artifacts Home', 'home');
 }
 
 // Wrap HTML with toolbar and inject link handler
@@ -1196,7 +1294,7 @@ function wrapWithToolbarAndLinkHandler(html: string, title: string, faviconUri: 
             <span style="font-family: monospace; font-weight: bold;">&gt;_</span>
         </button>
         <button class="aimax-toolbar-btn" onclick="openClaudeCode()" title="New Claude Code conversation">
-            <span style="color: #ff9500; font-size: 14px;">*</span>
+            <span style="color: #ff9500; font-size: 20px; line-height: 1;">*</span>
         </button>
     </div>
     `;
