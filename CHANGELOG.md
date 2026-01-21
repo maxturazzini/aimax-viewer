@@ -2,6 +2,27 @@
 
 All notable changes to the AIMax Viewer extension will be documented in this file.
 
+## [0.1.18] - 2026-01-21
+
+### Added
+- **Apps Manager**: New sidebar panel to monitor and control local web applications
+  - Start/Stop commands for configured apps
+  - Auto-discovery of running web servers
+  - Add discovered apps to configuration via "+" button
+- **AIMax Viewer Detection**: Discovered apps are identified as AIMax Viewer instances with special orange home icon
+- **API Endpoints**: `/api/apps`, `/api/ports`, `/api/apps/:id/start`, `/api/apps/:id/stop`
+
+### Fixed
+- **Tab Titles**: Tabs now show meaningful titles (page title, app name, or process name) instead of "127.0.0.1"
+- **AIMax Detection**: Robust JSON validation to avoid false positives when detecting AIMax Viewer instances
+
+### Technical
+- Apps configuration via VS Code settings (`aimaxViewer.appsManager.apps`)
+- Port scanning via `lsof` for auto-discovery
+- Health check endpoints for app status monitoring
+
+---
+
 ## [0.1.17] - 2026-01-18
 
 ### Added

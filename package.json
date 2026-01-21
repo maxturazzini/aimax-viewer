@@ -2,7 +2,7 @@
   "name": "aimax-viewer",
   "displayName": "AIMax Viewer",
   "description": "Auto-open Artifacts at startup + internal browser for localhost",
-  "version": "0.1.17",
+  "version": "0.1.18",
   "publisher": "aimax",
   "icon": "icon.png",
   "repository": {
@@ -60,6 +60,26 @@
         "command": "aimaxViewer.refreshTree",
         "title": "Refresh",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "aimaxViewer.startApp",
+        "title": "Start App",
+        "icon": "$(play)"
+      },
+      {
+        "command": "aimaxViewer.stopApp",
+        "title": "Stop App",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "aimaxViewer.refreshApps",
+        "title": "Refresh Apps",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "aimaxViewer.addAppToConfig",
+        "title": "Add to Config",
+        "icon": "$(add)"
       }
     ],
     "viewsContainers": {
@@ -76,6 +96,10 @@
         {
           "id": "aimaxViewer.artifactsTree",
           "name": "Artifacts"
+        },
+        {
+          "id": "aimaxViewer.appsTree",
+          "name": "Apps Manager"
         }
       ]
     },
@@ -102,6 +126,28 @@
           "command": "aimaxViewer.refreshTree",
           "when": "view == aimaxViewer.artifactsTree",
           "group": "navigation@3"
+        },
+        {
+          "command": "aimaxViewer.refreshApps",
+          "when": "view == aimaxViewer.appsTree",
+          "group": "navigation@1"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "aimaxViewer.startApp",
+          "when": "view == aimaxViewer.appsTree && viewItem == app-stopped",
+          "group": "inline"
+        },
+        {
+          "command": "aimaxViewer.stopApp",
+          "when": "view == aimaxViewer.appsTree && viewItem == app-running",
+          "group": "inline"
+        },
+        {
+          "command": "aimaxViewer.addAppToConfig",
+          "when": "view == aimaxViewer.appsTree && viewItem == app-discovered",
+          "group": "inline"
         }
       ]
     },
@@ -199,6 +245,59 @@
             ]
           },
           "description": "Folders to browse for artifacts. Each with label and relative path."
+        },
+        "aimaxViewer.appsManager.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable Apps Manager feature"
+        },
+        "aimaxViewer.appsManager.refreshInterval": {
+          "type": "number",
+          "default": 5000,
+          "description": "Auto-refresh interval in milliseconds (0 to disable)"
+        },
+        "aimaxViewer.appsManager.apps": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "description": "Unique identifier for the app"
+              },
+              "name": {
+                "type": "string",
+                "description": "Display name"
+              },
+              "port": {
+                "type": "number",
+                "description": "Port number"
+              },
+              "startCmd": {
+                "type": "string",
+                "description": "Command to start the app"
+              },
+              "stopCmd": {
+                "type": "string",
+                "description": "Command to stop the app (optional, defaults to kill by port)"
+              },
+              "cwd": {
+                "type": "string",
+                "description": "Working directory for the command"
+              },
+              "healthUrl": {
+                "type": "string",
+                "description": "URL to check if app is running"
+              },
+              "category": {
+                "type": "string",
+                "description": "Category for grouping in the tree view"
+              }
+            },
+            "required": ["id", "name", "port", "startCmd", "cwd", "healthUrl"]
+          },
+          "description": "List of apps to manage. Configure here or use auto-discovery."
         }
       }
     }

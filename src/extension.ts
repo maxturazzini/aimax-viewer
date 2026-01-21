@@ -4,6 +4,8 @@ import * as path from 'path';
 import * as http from 'http';
 import { parseMarkdown, wrapMarkdownHtml, extractFrontmatter } from './markdown-parser';
 import { ArtifactsTreeProvider, ArtifactItem, FolderConfig } from './treeview-provider';
+import { AppsManager } from './apps-manager';
+import { AppsTreeProvider, AppTreeItem, DiscoveredAppTreeItem } from './apps-tree-provider';
 
 let browserPanel: vscode.WebviewPanel | undefined;
 let homePanel: vscode.WebviewPanel | undefined;
@@ -11,6 +13,8 @@ let httpServer: http.Server | undefined;
 let serverPort = 3124;
 let extensionContext: vscode.ExtensionContext;
 let treeProvider: ArtifactsTreeProvider | undefined;
+let appsManager: AppsManager | undefined;
+let appsTreeProvider: AppsTreeProvider | undefined;
 
 
 // Settings
@@ -34,7 +38,9 @@ function getConfig() {
         browserLayout: config.get<string>('browser.layout', 'sidebar'),
         browserFolders: config.get<FolderConfig[]>('browser.folders', [
             { label: 'Artifacts', path: 'Artifacts' }
-        ])
+        ]),
+        appsManagerEnabled: config.get<boolean>('appsManager.enabled', true),
+        appsManagerRefreshInterval: config.get<number>('appsManager.refreshInterval', 5000)
     };
 }
 
@@ -146,6 +152,76 @@ export function activate(context: vscode.ExtensionContext) {
     });
     context.subscriptions.push(refreshTreeCommand);
 
+    // Apps Manager
+    if (config.appsManagerEnabled && workspaceFolder) {
+        appsManager = new AppsManager(workspaceFolder);
+
+        appsTreeProvider = new AppsTreeProvider(
+            appsManager,
+            config.appsManagerRefreshInterval
+        );
+
+        const appsTreeView = vscode.window.createTreeView('aimaxViewer.appsTree', {
+            treeDataProvider: appsTreeProvider,
+            showCollapseAll: false
+        });
+
+        // Start App command
+        const startAppCmd = vscode.commands.registerCommand(
+            'aimaxViewer.startApp',
+            async (item: AppTreeItem) => {
+                if (item && item.status && appsManager) {
+                    await appsManager.startApp(item.status.id);
+                    appsTreeProvider?.refresh();
+                }
+            }
+        );
+
+        // Stop App command
+        const stopAppCmd = vscode.commands.registerCommand(
+            'aimaxViewer.stopApp',
+            async (item: AppTreeItem) => {
+                if (item && item.status && appsManager) {
+                    await appsManager.stopApp(item.status.id);
+                    appsTreeProvider?.refresh();
+                }
+            }
+        );
+
+        // Refresh Apps command
+        const refreshAppsCmd = vscode.commands.registerCommand(
+            'aimaxViewer.refreshApps',
+            () => appsTreeProvider?.refresh()
+        );
+
+        // Add discovered app to config
+        const addAppCmd = vscode.commands.registerCommand(
+            'aimaxViewer.addAppToConfig',
+            async (item: DiscoveredAppTreeItem) => {
+                if (item && item.discovered && appsManager) {
+                    const name = await vscode.window.showInputBox({
+                        prompt: 'Enter a name for this app',
+                        value: `${item.discovered.process} (${item.discovered.port})`
+                    });
+                    if (name) {
+                        await appsManager.addAppToSettings(item.discovered, name);
+                        appsTreeProvider?.refresh();
+                    }
+                }
+            }
+        );
+
+        context.subscriptions.push(
+            appsTreeView,
+            startAppCmd,
+            stopAppCmd,
+            refreshAppsCmd,
+            addAppCmd
+        );
+
+        console.log('[AIMax] Apps Manager initialized');
+    }
+
     // Auto-open on startup based on mode setting
     if (config.startupMode !== 'none') {
         console.log('[AIMax] Startup mode:', config.startupMode);
@@ -167,7 +243,7 @@ export function activate(context: vscode.ExtensionContext) {
     }
 
     // Register browser command
-    const openBrowserCommand = vscode.commands.registerCommand('aimaxViewer.openBrowser', async (urlArg?: string) => {
+    const openBrowserCommand = vscode.commands.registerCommand('aimaxViewer.openBrowser', async (urlArg?: string, titleArg?: string) => {
         let url = urlArg;
 
         if (!url) {
@@ -185,7 +261,7 @@ export function activate(context: vscode.ExtensionContext) {
             url = 'http://' + url;
         }
 
-        openInBrowser(url);
+        openInBrowser(url, titleArg);
     });
 
     // Open Home Page command
@@ -1010,6 +1086,91 @@ function startHttpServer(workspaceFolder: string) {
             return;
         }
 
+        // Handle CORS preflight requests
+        if (req.method === 'OPTIONS') {
+            res.writeHead(200, {
+                'Access-Control-Allow-Origin': '*',
+                'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+                'Access-Control-Allow-Headers': 'Content-Type'
+            });
+            res.end();
+            return;
+        }
+
+        // API endpoint: list apps with status
+        if (url === '/api/apps') {
+            if (!appsManager) {
+                res.writeHead(503, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+                res.end(JSON.stringify({ error: 'Apps Manager not enabled' }));
+                return;
+            }
+            appsManager.getStatus().then(statuses => {
+                res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+                res.end(JSON.stringify(statuses));
+            }).catch((err) => {
+                res.writeHead(500, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+                res.end(JSON.stringify({ error: err.message }));
+            });
+            return;
+        }
+
+        // API endpoint: list ports in use
+        if (url === '/api/ports') {
+            if (!appsManager) {
+                res.writeHead(503, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+                res.end(JSON.stringify({ error: 'Apps Manager not enabled' }));
+                return;
+            }
+            appsManager.getPortsInUse().then(ports => {
+                res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+                res.end(JSON.stringify(ports));
+            }).catch((err) => {
+                res.writeHead(500, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+                res.end(JSON.stringify({ error: err.message }));
+            });
+            return;
+        }
+
+        // API endpoint: start app
+        const startMatch = url.match(/^\/api\/apps\/(.+)\/start$/);
+        if (req.method === 'POST' && startMatch) {
+            const appId = decodeURIComponent(startMatch[1]);
+            if (!appsManager) {
+                res.writeHead(503, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+                res.end(JSON.stringify({ error: 'Apps Manager not enabled' }));
+                return;
+            }
+            appsManager.startApp(appId).then(success => {
+                res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+                res.end(JSON.stringify({ success }));
+                appsTreeProvider?.refresh();
+            }).catch((err) => {
+                res.writeHead(500, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+                res.end(JSON.stringify({ error: err.message }));
+            });
+            return;
+        }
+
+        // API endpoint: stop app
+        const stopMatch = url.match(/^\/api\/apps\/(.+)\/stop$/);
+        if (req.method === 'POST' && stopMatch) {
+            const appId = decodeURIComponent(stopMatch[1]);
+            if (!appsManager) {
+                res.writeHead(503, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+                res.end(JSON.stringify({ error: 'Apps Manager not enabled' }));
+                return;
+            }
+            appsManager.stopApp(appId).then(success => {
+                res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+                res.end(JSON.stringify({ success }));
+                appsTreeProvider?.refresh();
+            }).catch((err) => {
+                res.writeHead(500, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+                res.end(JSON.stringify({ error: err.message }));
+            });
+            return;
+        }
+
         const filePath = path.join(workspaceFolder, decodeURIComponent(url));
 
         // Security: only serve files within workspace
@@ -1463,5 +1624,8 @@ export function deactivate() {
     }
     if (httpServer) {
         httpServer.close();
+    }
+    if (appsTreeProvider) {
+        appsTreeProvider.dispose();
     }
 }
