@@ -1171,6 +1171,16 @@ function startHttpServer(workspaceFolder: string) {
             return;
         }
 
+        // Handle root path: redirect to /Artifacts/index.html
+        if (url === '/' || url === '') {
+            res.writeHead(302, {
+                'Location': '/Artifacts/index.html',
+                'Access-Control-Allow-Origin': '*'
+            });
+            res.end();
+            return;
+        }
+
         const filePath = path.join(workspaceFolder, decodeURIComponent(url));
 
         // Security: only serve files within workspace
