@@ -2,7 +2,7 @@
   "name": "aimax-viewer",
   "displayName": "AIMax Viewer",
   "description": "Auto-open Artifacts at startup + internal browser for localhost",
-  "version": "0.1.18",
+  "version": "0.1.19",
   "publisher": "aimax",
   "icon": "icon.png",
   "repository": {
@@ -174,6 +174,16 @@
           "default": "Artifacts/index.html",
           "description": "Relative path to the home page file (from workspace root)"
         },
+        "aimaxViewer.startup.openClaudeCode": {
+          "type": "boolean",
+          "default": false,
+          "description": "Open Claude Code in secondary sidebar at startup (ZeroUI mode)"
+        },
+        "aimaxViewer.startup.focusSidebar": {
+          "type": "boolean",
+          "default": true,
+          "description": "Focus AIMax Viewer sidebar at startup"
+        },
         "aimaxViewer.console.openByDefault": {
           "type": "boolean",
           "default": false,
@@ -295,7 +305,14 @@
                 "description": "Category for grouping in the tree view"
               }
             },
-            "required": ["id", "name", "port", "startCmd", "cwd", "healthUrl"]
+            "required": [
+              "id",
+              "name",
+              "port",
+              "startCmd",
+              "cwd",
+              "healthUrl"
+            ]
           },
           "description": "List of apps to manage. Configure here or use auto-discovery."
         }
@@ -308,8 +325,9 @@
     "deploy": "./deploy.sh"
   },
   "devDependencies": {
-    "@types/vscode": "^1.80.0",
+    "@playwright/test": "^1.57.0",
     "@types/node": "^18.0.0",
+    "@types/vscode": "^1.80.0",
     "typescript": "^5.0.0"
   }
 }

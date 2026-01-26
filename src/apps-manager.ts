@@ -83,6 +83,14 @@ export class AppsManager {
             return false;
         }
 
+        // Validate startCmd is configured
+        if (!app.startCmd || app.startCmd.trim() === '') {
+            vscode.window.showErrorMessage(
+                `${app.name}: Start command not configured. Edit 'aimaxViewer.appsManager.apps' in Settings.`
+            );
+            return false;
+        }
+
         try {
             // Resolve cwd - support absolute paths
             const cwd = path.isAbsolute(app.cwd) ? app.cwd : path.join(this.workspaceRoot, app.cwd);

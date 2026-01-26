@@ -40,7 +40,10 @@ function getConfig() {
             { label: 'Artifacts', path: 'Artifacts' }
         ]),
         appsManagerEnabled: config.get<boolean>('appsManager.enabled', true),
-        appsManagerRefreshInterval: config.get<number>('appsManager.refreshInterval', 5000)
+        appsManagerRefreshInterval: config.get<number>('appsManager.refreshInterval', 5000),
+        // ZeroUI layout options
+        startupOpenClaudeCode: config.get<boolean>('startup.openClaudeCode', false),
+        startupFocusSidebar: config.get<boolean>('startup.focusSidebar', true)
     };
 }
 
@@ -240,6 +243,22 @@ export function activate(context: vscode.ExtensionContext) {
         }
     } else {
         console.log('[AIMax] Startup mode: none');
+    }
+
+    // ZeroUI: Open Claude Code in secondary sidebar at startup
+    if (config.startupOpenClaudeCode) {
+        console.log('[AIMax] Opening Claude Code at startup');
+        setTimeout(() => {
+            vscode.commands.executeCommand('claude-vscode.newConversation');
+        }, 500); // Small delay to let the UI settle
+    }
+
+    // ZeroUI: Focus AIMax Viewer sidebar
+    if (config.startupFocusSidebar) {
+        console.log('[AIMax] Focusing AIMax Viewer sidebar');
+        setTimeout(() => {
+            vscode.commands.executeCommand('workbench.view.extension.aimax-viewer');
+        }, 100);
     }
 
     // Register browser command
@@ -1364,6 +1383,9 @@ function openArtifactsHome(workspaceFolder: string, homePage: string = 'Artifact
                 vscode.commands.executeCommand('claude-vscode.newConversation');
             } else if (message.command === 'openArtifactsBrowser') {
                 vscode.commands.executeCommand('aimaxViewer.openArtifactsBrowser');
+            } else if (message.command === 'reload') {
+                // Re-render the home panel by re-reading the file
+                openArtifactsHome(workspaceFolder);
             }
         });
     }
@@ -1500,7 +1522,7 @@ function wrapWithToolbarAndLinkHandler(html: string, title: string, faviconUri: 
         }
 
         function reload() {
-            location.reload();
+            vscode.postMessage({ command: 'reload' });
         }
 
         document.addEventListener('click', (e) => {
