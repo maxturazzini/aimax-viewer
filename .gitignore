@@ -4,3 +4,11 @@ out/
 *.zip
 .vscode-test/
 .claude/
+.vscode/
+Artifacts/
+test-results/
+tests/
+PLAN-*.md
+TODO.md
+deploy.sh
+playwright.config.ts
