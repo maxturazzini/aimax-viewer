@@ -4,7 +4,7 @@
   "plugins": [
     {
       "name": "aimax-bridge",
-      "source": ".",
+      "source": "./plugins/aimax-bridge",
       "description": "Adds Claude Bridge API integration to HTML artifacts served by AIMax Viewer"
     }
   ]
