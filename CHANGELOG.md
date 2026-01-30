@@ -2,6 +2,30 @@
 
 All notable changes to the AIMax Viewer extension will be documented in this file.
 
+## [0.1.20] - 2026-01-30
+
+### Added
+- **Claude Bridge API**: New `/__claude` HTTP endpoint enabling direct communication between HTML artifacts and Claude Code
+  - `vscode` mode: Opens Claude Code extension panel for a new conversation
+  - `terminal` mode: Opens interactive Claude session in VS Code terminal with pre-filled prompt
+  - `print` mode: Sends prompt to Claude CLI and returns the response as JSON (for inline AI responses in artifacts)
+  - `copy` mode: Returns prompt text for clipboard operations
+- **Artifact-to-Claude workflow**: HTML pages served by AIMax Viewer can now send prompts directly to Claude via `fetch()` calls
+
+### Technical
+- Uses safe command execution for child processes (no shell injection)
+- JSON request body with plain-text fallback for backward compatibility
+- CORS-enabled for cross-origin artifact requests
+
+---
+
+## [0.1.19] - 2026-01-30
+
+### Fixed
+- **ARTIFACTS panel empty without Artifacts folder**: The TreeView provider failed to initialize in workspaces lacking a root `Artifacts/` directory, ignoring the `browser.folders` setting entirely. Now uses the VS Code workspace folder directly.
+
+---
+
 ## [0.1.18] - 2026-01-21
 
 ### Added

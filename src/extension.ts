@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as http from 'http';
+import { execFile, spawn } from 'child_process';
 import { parseMarkdown, wrapMarkdownHtml, extractFrontmatter } from './markdown-parser';
 import { ArtifactsTreeProvider, ArtifactItem, FolderConfig } from './treeview-provider';
 import { AppsManager } from './apps-manager';
@@ -64,26 +65,6 @@ function generateCSP(): string {
 }
 
 // Find workspace root by looking for Artifacts directory
-function findWorkspaceRoot(startPath: string): string | undefined {
-    let currentPath = startPath;
-    const maxLevels = 10; // Safety limit
-
-    for (let i = 0; i < maxLevels; i++) {
-        const artifactsPath = path.join(currentPath, 'Artifacts');
-        if (fs.existsSync(artifactsPath)) {
-            console.log('[AIMax] Found workspace root at:', currentPath);
-            return currentPath;
-        }
-        const parentPath = path.dirname(currentPath);
-        if (parentPath === currentPath) {
-            // Reached filesystem root
-            break;
-        }
-        currentPath = parentPath;
-    }
-    console.log('[AIMax] Could not find workspace root from:', startPath);
-    return undefined;
-}
 
 export function activate(context: vscode.ExtensionContext) {
     extensionContext = context;
@@ -92,8 +73,7 @@ export function activate(context: vscode.ExtensionContext) {
     const vsCodeWorkspace = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     console.log('[AIMax] VS Code workspace:', vsCodeWorkspace);
 
-    // Find the actual workspace root (where Artifacts exists)
-    const workspaceFolder = vsCodeWorkspace ? findWorkspaceRoot(vsCodeWorkspace) : undefined;
+    const workspaceFolder = vsCodeWorkspace;
     console.log('[AIMax] Resolved workspace folder:', workspaceFolder);
 
     const config = getConfig();
@@ -1113,6 +1093,103 @@ function startHttpServer(workspaceFolder: string) {
                 'Access-Control-Allow-Headers': 'Content-Type'
             });
             res.end();
+            return;
+        }
+
+        // API endpoint: send prompt to Claude Code (supports modes: terminal, vscode, print, copy)
+        if (url === '/__claude' && req.method === 'POST') {
+            let body = '';
+            req.on('data', (chunk: Buffer) => { body += chunk.toString(); });
+            req.on('end', () => {
+                const raw = body.trim();
+                let prompt = '';
+                let mode = 'terminal';
+
+                // Try JSON parse, fall back to plain text
+                try {
+                    const parsed = JSON.parse(raw);
+                    prompt = (parsed.prompt || '').trim();
+                    mode = parsed.mode || 'terminal';
+                } catch {
+                    prompt = raw;
+                }
+
+                if (!prompt) {
+                    res.writeHead(400, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+                    res.end(JSON.stringify({ error: 'Empty prompt' }));
+                    return;
+                }
+
+                const headers: Record<string, string> = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' };
+
+                if (mode === 'vscode') {
+                    // Copy prompt to clipboard, then open Claude Code panel
+                    vscode.env.clipboard.writeText(prompt).then(() => {
+                        vscode.commands.executeCommand('claude-vscode.newConversation');
+                        res.writeHead(200, headers);
+                        res.end(JSON.stringify({ ok: true, mode: 'vscode', prompt, note: 'Prompt copied to clipboard. Paste into Claude Code panel.' }));
+                    });
+                } else if (mode === 'terminal') {
+                    // Open interactive Claude session in terminal with prompt
+                    const terminal = vscode.window.createTerminal('Claude Code');
+                    terminal.show();
+                    const escaped = prompt.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\$/g, '\\$').replace(/`/g, '\\`').replace(/'/g, "'\\''");
+                    terminal.sendText(`claude "${escaped}"`);
+                    res.writeHead(200, headers);
+                    res.end(JSON.stringify({ ok: true, mode: 'terminal', prompt }));
+                } else if (mode === 'print') {
+                    // Non-interactive: run claude -p and return the response via stdin
+                    console.log('[AIMax] print mode: spawning claude -p -, cwd:', workspaceFolder);
+                    const child = spawn('claude', ['-p', '-'], {
+                        cwd: workspaceFolder,
+                        shell: true,
+                        env: { ...process.env }
+                    });
+                    child.stdin.write(prompt);
+                    child.stdin.end();
+                    console.log('[AIMax] print mode: wrote prompt to stdin, length:', prompt.length);
+                    let stdout = '';
+                    let stderr = '';
+                    const timeout = setTimeout(() => {
+                        child.kill();
+                        console.log('[AIMax] print mode: TIMEOUT after 120s. stdout so far:', stdout.length, 'chars. stderr:', stderr);
+                        res.writeHead(504, headers);
+                        res.end(JSON.stringify({ ok: false, error: 'Timeout (120s)' }));
+                    }, 120000);
+                    child.stdout.on('data', (data: Buffer) => {
+                        stdout += data.toString();
+                        console.log('[AIMax] print mode: stdout chunk, total:', stdout.length);
+                    });
+                    child.stderr.on('data', (data: Buffer) => {
+                        stderr += data.toString();
+                        console.log('[AIMax] print mode: stderr:', data.toString().trim());
+                    });
+                    child.on('close', (code: number | null) => {
+                        clearTimeout(timeout);
+                        console.log('[AIMax] print mode: process closed, code:', code, 'stdout:', stdout.length, 'stderr:', stderr.length);
+                        if (code !== 0) {
+                            res.writeHead(500, headers);
+                            res.end(JSON.stringify({ ok: false, error: stderr || 'Exit code ' + code }));
+                        } else {
+                            res.writeHead(200, headers);
+                            res.end(JSON.stringify({ ok: true, mode: 'print', response: stdout }));
+                        }
+                    });
+                    child.on('error', (err: Error) => {
+                        clearTimeout(timeout);
+                        console.log('[AIMax] print mode: spawn error:', err.message);
+                        res.writeHead(500, headers);
+                        res.end(JSON.stringify({ ok: false, error: err.message }));
+                    });
+                } else if (mode === 'copy') {
+                    // Just echo back the prompt for client-side clipboard handling
+                    res.writeHead(200, headers);
+                    res.end(JSON.stringify({ ok: true, mode: 'copy', prompt }));
+                } else {
+                    res.writeHead(400, headers);
+                    res.end(JSON.stringify({ ok: false, error: 'Unknown mode: ' + mode }));
+                }
+            });
             return;
         }
 

@@ -1,0 +1,9 @@
+{
+  "name": "aimax-bridge",
+  "description": "Adds Claude Bridge integration to HTML artifacts — send prompts to Claude directly from the browser",
+  "version": "1.0.0",
+  "author": {
+    "name": "Max Turazzini",
+    "url": "https://maxturazzini.com"
+  }
+}

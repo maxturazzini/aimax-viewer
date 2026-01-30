@@ -1,0 +1,11 @@
+{
+  "name": "aimax-viewer",
+  "owner": { "name": "Max Turazzini" },
+  "plugins": [
+    {
+      "name": "aimax-bridge",
+      "source": ".",
+      "description": "Adds Claude Bridge API integration to HTML artifacts served by AIMax Viewer"
+    }
+  ]
+}
