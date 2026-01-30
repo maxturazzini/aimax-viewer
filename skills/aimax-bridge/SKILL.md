@@ -9,6 +9,23 @@ argument-hint: "[buttons|inline]"
 
 Adds a Claude Bridge panel to HTML artifacts, enabling direct communication with Claude Code from the browser via the AIMax Viewer HTTP server.
 
+## Prerequisites
+
+This skill requires **AIMax Viewer**, a VS Code extension that serves HTML artifacts and provides the `/__claude` HTTP endpoint used by the bridge.
+
+**Install AIMax Viewer:**
+
+1. Download the latest `.vsix` from [GitHub Releases](https://github.com/maxturazzini/aimax-viewer/releases)
+2. In VS Code: `Cmd+Shift+P` → "Extensions: Install from VSIX..." → select the downloaded file
+3. Reload the window
+
+Or via CLI:
+```bash
+code --install-extension aimax-viewer-<version>.vsix --force
+```
+
+Repository: [github.com/maxturazzini/aimax-viewer](https://github.com/maxturazzini/aimax-viewer)
+
 ## When to use this skill
 
 - When creating an HTML artifact that will be served by AIMax Viewer
