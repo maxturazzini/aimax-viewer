@@ -406,6 +406,7 @@ export function activate(context: vscode.ExtensionContext) {
     <a href="https://github.com/maxturazzini/aimax-viewer#readme" title="Open README in Viewer" data-viewer="true">&#x1F4D6; README</a>
     <a href="https://github.com/maxturazzini/aimax-viewer" title="GitHub Repository">&#x2B50; AIMax Viewer on GitHub</a>
     <a href="https://github.com/maxturazzini/aimax-viewer/releases" title="Download latest version">&#x1F4E6; Releases / Updates</a>
+    <a href="changelog" title="View Changelog" data-changelog="true">&#x1F4CB; Changelog</a>
     <div class="sep"></div>
     <a href="https://github.com/maxturazzini/aimax-viewer/issues" title="Report issues or request features">&#x1F41B; Report Issue / Feature Request</a>
 <script>
@@ -413,7 +414,7 @@ export function activate(context: vscode.ExtensionContext) {
     document.querySelectorAll('a').forEach(a => {
         a.addEventListener('click', e => {
             e.preventDefault();
-            const cmd = a.dataset.viewer ? 'openInViewer' : 'openUrl';
+            const cmd = a.dataset.changelog ? 'openChangelog' : a.dataset.viewer ? 'openInViewer' : 'openUrl';
             vscode.postMessage({ command: cmd, url: a.href });
         });
     });
@@ -422,6 +423,16 @@ export function activate(context: vscode.ExtensionContext) {
             view.webview.onDidReceiveMessage(msg => {
                 if (msg.command === 'openInViewer') {
                     openInBrowser(msg.url, 'README');
+                } else if (msg.command === 'openChangelog') {
+                    // Open local CHANGELOG.md in viewer
+                    const changelogPath = path.join(extensionContext.extensionPath, 'changelog.md');
+                    if (fs.existsSync(changelogPath)) {
+                        const content = fs.readFileSync(changelogPath, 'utf-8');
+                        const { content: md, metadata } = extractFrontmatter(content);
+                        const html = wrapMarkdownHtml(parseMarkdown(md), 'Changelog', metadata);
+                        const panel = vscode.window.createWebviewPanel('aimaxChangelog', 'Changelog', vscode.ViewColumn.Two, { enableScripts: false });
+                        panel.webview.html = html;
+                    }
                 } else if (msg.command === 'openUrl') {
                     vscode.env.openExternal(vscode.Uri.parse(msg.url));
                 }
