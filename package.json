@@ -2,7 +2,7 @@
   "name": "aimax-viewer",
   "displayName": "AIMax Viewer",
   "description": "Auto-open Artifacts at startup + internal browser for localhost",
-  "version": "0.1.20",
+  "version": "0.1.21",
   "publisher": "aimax",
   "icon": "icon.png",
   "repository": {
@@ -62,6 +62,11 @@
         "icon": "$(refresh)"
       },
       {
+        "command": "aimaxViewer.collapseAll",
+        "title": "Collapse All",
+        "icon": "$(collapse-all)"
+      },
+      {
         "command": "aimaxViewer.startApp",
         "title": "Start App",
         "icon": "$(play)"
@@ -95,11 +100,17 @@
       "aimax-viewer": [
         {
           "id": "aimaxViewer.artifactsTree",
-          "name": "Artifacts"
+          "name": "Artifacts",
+          "type": "webview"
         },
         {
           "id": "aimaxViewer.appsTree",
           "name": "Apps Manager"
+        },
+        {
+          "id": "aimaxViewer.linksView",
+          "name": "Useful Links",
+          "type": "webview"
         }
       ]
     },
@@ -126,6 +137,11 @@
           "command": "aimaxViewer.refreshTree",
           "when": "view == aimaxViewer.artifactsTree",
           "group": "navigation@3"
+        },
+        {
+          "command": "aimaxViewer.collapseAll",
+          "when": "view == aimaxViewer.artifactsTree",
+          "group": "navigation@4"
         },
         {
           "command": "aimaxViewer.refreshApps",
@@ -329,5 +345,8 @@
     "@types/node": "^18.0.0",
     "@types/vscode": "^1.80.0",
     "typescript": "^5.0.0"
+  },
+  "dependencies": {
+    "@vscode/codicons": "^0.0.44"
   }
 }

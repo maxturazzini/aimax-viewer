@@ -4,7 +4,7 @@ import * as path from 'path';
 import * as http from 'http';
 import { execFile, spawn } from 'child_process';
 import { parseMarkdown, wrapMarkdownHtml, extractFrontmatter } from './markdown-parser';
-import { ArtifactsTreeProvider, ArtifactItem, FolderConfig } from './treeview-provider';
+import { ArtifactsTreeProvider, ArtifactsWebviewProvider, ArtifactItem, FolderConfig } from './treeview-provider';
 import { AppsManager } from './apps-manager';
 import { AppsTreeProvider, AppTreeItem, DiscoveredAppTreeItem } from './apps-tree-provider';
 
@@ -14,6 +14,7 @@ let httpServer: http.Server | undefined;
 let serverPort = 3124;
 let extensionContext: vscode.ExtensionContext;
 let treeProvider: ArtifactsTreeProvider | undefined;
+let webviewProvider: ArtifactsWebviewProvider | undefined;
 let appsManager: AppsManager | undefined;
 let appsTreeProvider: AppsTreeProvider | undefined;
 
@@ -110,13 +111,43 @@ export function activate(context: vscode.ExtensionContext) {
     statusBarItem.show();
     context.subscriptions.push(statusBarItem);
 
-    // Register TreeView for sidebar layout
-    treeProvider = new ArtifactsTreeProvider(workspaceFolder, config.browserFolders);
-    const treeView = vscode.window.createTreeView('aimaxViewer.artifactsTree', {
-        treeDataProvider: treeProvider,
-        showCollapseAll: true
+    // Register WebviewView for sidebar layout (with search bar)
+    webviewProvider = new ArtifactsWebviewProvider(workspaceFolder, config.browserFolders, context.extensionUri);
+    const webviewRegistration = vscode.window.registerWebviewViewProvider('aimaxViewer.artifactsTree', webviewProvider);
+    context.subscriptions.push(webviewRegistration);
+
+    // Handle file open from webview tree
+    webviewProvider.onOpenFile(fsPath => {
+        if (workspaceFolder) {
+            const httpUrl = getHttpUrl(fsPath, workspaceFolder);
+            openInBrowser(httpUrl);
+        }
     });
-    context.subscriptions.push(treeView);
+
+    // Handle context menu actions from webview tree
+    webviewProvider.onContextAction(({ action, fsPath }) => {
+        const uri = vscode.Uri.file(fsPath);
+        switch (action) {
+            case 'openInEditor':
+                vscode.window.showTextDocument(uri);
+                break;
+            case 'openInBrowser':
+                if (workspaceFolder) {
+                    const httpUrl = getHttpUrl(fsPath, workspaceFolder);
+                    vscode.env.openExternal(vscode.Uri.parse(httpUrl));
+                }
+                break;
+            case 'revealInExplorer':
+                vscode.commands.executeCommand('revealInExplorer', uri);
+                break;
+            case 'revealInOS':
+                vscode.commands.executeCommand('revealFileInOS', uri);
+                break;
+        }
+    });
+
+    // Keep legacy tree provider for API compatibility
+    treeProvider = new ArtifactsTreeProvider(workspaceFolder, config.browserFolders);
 
     // Register command to open artifact from tree
     const openFromTreeCommand = vscode.commands.registerCommand('aimaxViewer.openFromTree', (item: ArtifactItem) => {
@@ -129,11 +160,22 @@ export function activate(context: vscode.ExtensionContext) {
 
     // Register command to refresh tree
     const refreshTreeCommand = vscode.commands.registerCommand('aimaxViewer.refreshTree', () => {
+        if (webviewProvider) {
+            webviewProvider.refresh();
+        }
         if (treeProvider) {
             treeProvider.refresh();
         }
     });
     context.subscriptions.push(refreshTreeCommand);
+
+    // Register command to collapse all tree items
+    const collapseAllCommand = vscode.commands.registerCommand('aimaxViewer.collapseAll', () => {
+        if (webviewProvider) {
+            webviewProvider.collapseAll();
+        }
+    });
+    context.subscriptions.push(collapseAllCommand);
 
     // Apps Manager
     if (config.appsManagerEnabled && workspaceFolder) {
@@ -349,6 +391,46 @@ export function activate(context: vscode.ExtensionContext) {
             }
         }
     });
+
+    // Register Useful Links webview
+    const linksProvider: vscode.WebviewViewProvider = {
+        resolveWebviewView(view: vscode.WebviewView) {
+            view.webview.options = { enableScripts: true };
+            view.webview.html = `<!DOCTYPE html>
+<html><head><style>
+    body { font-family: var(--vscode-font-family); font-size: var(--vscode-font-size); color: var(--vscode-foreground); background: var(--vscode-sideBar-background); padding: 8px 12px; }
+    a { color: var(--vscode-textLink-foreground); text-decoration: none; display: flex; align-items: center; gap: 6px; padding: 4px 0; font-size: 12px; }
+    a:hover { color: var(--vscode-textLink-activeForeground); text-decoration: underline; }
+    .sep { border-top: 1px solid var(--vscode-panel-border, transparent); margin: 6px 0; }
+</style></head><body>
+    <a href="https://github.com/maxturazzini/aimax-viewer#readme" title="Open README in Viewer" data-viewer="true">&#x1F4D6; README</a>
+    <a href="https://github.com/maxturazzini/aimax-viewer" title="GitHub Repository">&#x2B50; AIMax Viewer on GitHub</a>
+    <a href="https://github.com/maxturazzini/aimax-viewer/releases" title="Download latest version">&#x1F4E6; Releases / Updates</a>
+    <div class="sep"></div>
+    <a href="https://github.com/maxturazzini/aimax-viewer/issues" title="Report issues or request features">&#x1F41B; Report Issue / Feature Request</a>
+<script>
+    const vscode = acquireVsCodeApi();
+    document.querySelectorAll('a').forEach(a => {
+        a.addEventListener('click', e => {
+            e.preventDefault();
+            const cmd = a.dataset.viewer ? 'openInViewer' : 'openUrl';
+            vscode.postMessage({ command: cmd, url: a.href });
+        });
+    });
+</script>
+</body></html>`;
+            view.webview.onDidReceiveMessage(msg => {
+                if (msg.command === 'openInViewer') {
+                    openInBrowser(msg.url, 'README');
+                } else if (msg.command === 'openUrl') {
+                    vscode.env.openExternal(vscode.Uri.parse(msg.url));
+                }
+            });
+        }
+    };
+    context.subscriptions.push(
+        vscode.window.registerWebviewViewProvider('aimaxViewer.linksView', linksProvider)
+    );
 
     context.subscriptions.push(
         openBrowserCommand,
@@ -1207,6 +1289,17 @@ function startHttpServer(workspaceFolder: string) {
                 res.writeHead(500, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
                 res.end(JSON.stringify({ error: err.message }));
             });
+            return;
+        }
+
+        // API endpoint: identity (workspace name for cross-instance discovery)
+        if (url === '/api/identity') {
+            const workspaceName = vscode.workspace.name || path.basename(workspaceFolder);
+            res.writeHead(200, {
+                'Content-Type': 'application/json',
+                'Access-Control-Allow-Origin': '*'
+            });
+            res.end(JSON.stringify({ workspace: workspaceName }));
             return;
         }
 

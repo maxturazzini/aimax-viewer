@@ -2,6 +2,35 @@
 
 All notable changes to the AIMax Viewer extension will be documented in this file.
 
+## [0.1.21] - 2026-01-31
+
+### Added
+- **Artifacts Sidebar with Search**: Replaced native TreeView with custom WebviewView featuring a built-in search bar and codicons for file type icons
+- **Context Menu on Artifacts**: Right-click on files/folders in the sidebar for "Open in Viewer", "Open in Editor", "Open in Browser", "Reveal in Explorer", "Reveal in Finder"
+- **Collapse All**: New toolbar button to collapse all expanded folders in the Artifacts tree
+- **Workspace Identity API**: New `/api/identity` endpoint returns the workspace name, enabling cross-instance identification in Apps Manager
+- **Workspace Name in Discovered Apps**: Discovered AIMax Viewer instances now display their workspace name (e.g., "miniMe :3134") instead of generic labels
+- **Useful Links Panel**: New sidebar section with links to GitHub README (opens in Viewer), repository, releases, and issue tracker
+- **README in Viewer**: README link opens directly inside AIMax Viewer browser panel
+
+### Technical
+- Added `@vscode/codicons` dependency for sidebar icons
+- Artifacts panel type changed from TreeView to WebviewView
+- Legacy `ArtifactsTreeProvider` kept for API compatibility
+
+---
+
+### Aggiunto (IT)
+- **Sidebar Artifacts con Ricerca**: Sostituita la TreeView nativa con una WebviewView custom con barra di ricerca integrata e icone codicon per i tipi di file
+- **Menu Contestuale sugli Artifacts**: Click destro su file/cartelle nella sidebar per "Apri nel Viewer", "Apri nell'Editor", "Apri nel Browser", "Mostra in Explorer", "Mostra nel Finder"
+- **Comprimi Tutto**: Nuovo pulsante nella toolbar per comprimere tutte le cartelle espanse nell'albero Artifacts
+- **API Identità Workspace**: Nuovo endpoint `/api/identity` che restituisce il nome del workspace, abilitando l'identificazione cross-istanza nell'Apps Manager
+- **Nome Workspace nelle App Scoperte**: Le istanze AIMax Viewer scoperte mostrano ora il nome del workspace (es. "miniMe :3134") invece di etichette generiche
+- **Pannello Link Utili**: Nuova sezione nella sidebar con link al README GitHub (si apre nel Viewer), repository, release e issue tracker
+- **README nel Viewer**: Il link README si apre direttamente nel pannello browser di AIMax Viewer
+
+---
+
 ## [0.1.20] - 2026-01-30
 
 ### Added

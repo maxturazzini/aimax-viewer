@@ -28,6 +28,7 @@ export interface DiscoveredApp {
     healthUrl: string;
     isAimaxViewer: boolean;
     title?: string;
+    workspaceName?: string;
 }
 
 export class AppsManager {
@@ -262,13 +263,17 @@ export class AppsManager {
                 // Try to get page title
                 const title = await this.fetchPageTitle(healthUrl);
 
+                // Fetch workspace name from AIMax Viewer instances
+                const workspaceName = isAimaxViewer ? await this.fetchWorkspaceName(p.port) : undefined;
+
                 discovered.push({
                     port: p.port,
                     pid: p.pid,
                     process: p.process,
                     healthUrl,
                     isAimaxViewer,
-                    title
+                    title,
+                    workspaceName
                 });
             }
         }
@@ -383,6 +388,39 @@ export class AppsManager {
             }).on('error', () => {
                 clearTimeout(timeout);
                 resolve(false);
+            });
+        });
+    }
+
+    private fetchWorkspaceName(port: number): Promise<string | undefined> {
+        return new Promise((resolve) => {
+            const timeout = setTimeout(() => resolve(undefined), 2000);
+
+            http.get(`http://127.0.0.1:${port}/api/identity`, (res) => {
+                if (res.statusCode !== 200) {
+                    clearTimeout(timeout);
+                    resolve(undefined);
+                    return;
+                }
+
+                let data = '';
+                res.on('data', chunk => { data += chunk; });
+                res.on('end', () => {
+                    clearTimeout(timeout);
+                    try {
+                        const parsed = JSON.parse(data);
+                        resolve(parsed.workspace || undefined);
+                    } catch {
+                        resolve(undefined);
+                    }
+                });
+                res.on('error', () => {
+                    clearTimeout(timeout);
+                    resolve(undefined);
+                });
+            }).on('error', () => {
+                clearTimeout(timeout);
+                resolve(undefined);
             });
         });
     }

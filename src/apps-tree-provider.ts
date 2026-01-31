@@ -73,14 +73,16 @@ export class CategoryTreeItem extends vscode.TreeItem {
 export class DiscoveredAppTreeItem extends vscode.TreeItem {
     constructor(public readonly discovered: DiscoveredApp) {
         // Compute the display title - always meaningful, never undefined
+        const aimaxLabel = discovered.workspaceName || 'AIMax Viewer';
+
         const tabTitle = discovered.isAimaxViewer
-            ? `AIMax Viewer :${discovered.port}`
+            ? `${aimaxLabel} :${discovered.port}`
             : discovered.title
                 ? discovered.title
                 : `${discovered.process.replace(/\\x20/g, ' ')} :${discovered.port}`;
 
         const displayName = discovered.isAimaxViewer
-            ? `AIMax Viewer :${discovered.port}`
+            ? `${aimaxLabel} :${discovered.port}`
             : discovered.title
                 ? `${discovered.title} :${discovered.port}`
                 : `${discovered.process.replace(/\\x20/g, ' ')} :${discovered.port}`;
