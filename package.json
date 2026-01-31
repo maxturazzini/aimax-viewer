@@ -85,6 +85,11 @@
         "command": "aimaxViewer.addAppToConfig",
         "title": "Add to Config",
         "icon": "$(add)"
+      },
+      {
+        "command": "aimaxViewer.clearRecents",
+        "title": "Clear Recents",
+        "icon": "$(clear-all)"
       }
     ],
     "viewsContainers": {
@@ -101,6 +106,11 @@
         {
           "id": "aimaxViewer.artifactsTree",
           "name": "Artifacts",
+          "type": "webview"
+        },
+        {
+          "id": "aimaxViewer.recentsView",
+          "name": "Recents",
           "type": "webview"
         },
         {
@@ -142,6 +152,11 @@
           "command": "aimaxViewer.collapseAll",
           "when": "view == aimaxViewer.artifactsTree",
           "group": "navigation@4"
+        },
+        {
+          "command": "aimaxViewer.clearRecents",
+          "when": "view == aimaxViewer.recentsView",
+          "group": "navigation@1"
         },
         {
           "command": "aimaxViewer.refreshApps",

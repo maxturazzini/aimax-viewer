@@ -5,10 +5,12 @@ import * as http from 'http';
 import { execFile, spawn } from 'child_process';
 import { parseMarkdown, wrapMarkdownHtml, extractFrontmatter } from './markdown-parser';
 import { ArtifactsTreeProvider, ArtifactsWebviewProvider, ArtifactItem, FolderConfig } from './treeview-provider';
+import { RecentsWebviewProvider } from './recents-provider';
 import { AppsManager } from './apps-manager';
 import { AppsTreeProvider, AppTreeItem, DiscoveredAppTreeItem } from './apps-tree-provider';
 
 let browserPanel: vscode.WebviewPanel | undefined;
+const openBrowserPanels = new Map<string, vscode.WebviewPanel>();
 let homePanel: vscode.WebviewPanel | undefined;
 let httpServer: http.Server | undefined;
 let serverPort = 3124;
@@ -17,6 +19,7 @@ let treeProvider: ArtifactsTreeProvider | undefined;
 let webviewProvider: ArtifactsWebviewProvider | undefined;
 let appsManager: AppsManager | undefined;
 let appsTreeProvider: AppsTreeProvider | undefined;
+let recentsProvider: RecentsWebviewProvider | undefined;
 
 
 // Settings
@@ -115,6 +118,49 @@ export function activate(context: vscode.ExtensionContext) {
     webviewProvider = new ArtifactsWebviewProvider(workspaceFolder, config.browserFolders, context.extensionUri);
     const webviewRegistration = vscode.window.registerWebviewViewProvider('aimaxViewer.artifactsTree', webviewProvider);
     context.subscriptions.push(webviewRegistration);
+
+    // Register Recents webview panel
+    recentsProvider = new RecentsWebviewProvider(workspaceFolder, context.extensionUri, context.workspaceState);
+    context.subscriptions.push(
+        vscode.window.registerWebviewViewProvider('aimaxViewer.recentsView', recentsProvider)
+    );
+
+    // Handle file open from recents
+    recentsProvider.onOpenFile(fsPath => {
+        if (workspaceFolder) {
+            const httpUrl = getHttpUrl(fsPath, workspaceFolder);
+            openInBrowser(httpUrl);
+        }
+    });
+
+    // Handle context menu actions from recents
+    recentsProvider.onContextAction(({ action, fsPath }) => {
+        const uri = vscode.Uri.file(fsPath);
+        switch (action) {
+            case 'openInEditor':
+                vscode.window.showTextDocument(uri);
+                break;
+            case 'openInBrowser':
+                if (workspaceFolder) {
+                    const httpUrl = getHttpUrl(fsPath, workspaceFolder);
+                    vscode.env.openExternal(vscode.Uri.parse(httpUrl));
+                }
+                break;
+            case 'revealInExplorer':
+                vscode.commands.executeCommand('revealInExplorer', uri);
+                break;
+            case 'revealInOS':
+                vscode.commands.executeCommand('revealFileInOS', uri);
+                break;
+        }
+    });
+
+    // Register clear recents command
+    context.subscriptions.push(
+        vscode.commands.registerCommand('aimaxViewer.clearRecents', () => {
+            recentsProvider?.clearRecents();
+        })
+    );
 
     // Handle file open from webview tree
     webviewProvider.onOpenFile(fsPath => {
@@ -456,6 +502,20 @@ export function activate(context: vscode.ExtensionContext) {
 }
 
 function openInBrowser(url: string, customTitle?: string) {
+    // Track in recents if it's a local file
+    if (recentsProvider) {
+        try {
+            const urlObj = new URL(url);
+            if (urlObj.hostname === '127.0.0.1' && urlObj.port === String(serverPort)) {
+                const workspaceFolders = vscode.workspace.workspaceFolders;
+                if (workspaceFolders) {
+                    const fsPath = path.join(workspaceFolders[0].uri.fsPath, decodeURIComponent(urlObj.pathname));
+                    recentsProvider.addRecent(fsPath);
+                }
+            }
+        } catch { /* ignore non-URL strings */ }
+    }
+
     const config = getConfig();
 
     // Extract title from URL path for local files
@@ -478,10 +538,17 @@ function openInBrowser(url: string, customTitle?: string) {
         }
     }
 
-    // Multi-tab mode: always create new panel
+    // Multi-tab mode: reuse panel if same URL is already open, otherwise create new
     // Single-tab mode: reuse existing panel
     if (config.multiTab) {
-        // Create a new panel for each URL
+        // Check if this URL already has an open panel
+        const existingPanel = openBrowserPanels.get(url);
+        if (existingPanel) {
+            existingPanel.reveal(vscode.ViewColumn.Two);
+            return;
+        }
+
+        // Create a new panel for this URL
         const newPanel = vscode.window.createWebviewPanel(
             'aimaxBrowser',
             pageTitle,
@@ -492,6 +559,12 @@ function openInBrowser(url: string, customTitle?: string) {
                 localResourceRoots: [extensionContext.extensionUri]
             }
         );
+
+        // Track the panel
+        openBrowserPanels.set(url, newPanel);
+        newPanel.onDidDispose(() => {
+            openBrowserPanels.delete(url);
+        });
 
         // Get favicon URI
         const faviconPath = vscode.Uri.joinPath(extensionContext.extensionUri, 'icon.png');
