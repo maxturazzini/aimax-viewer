@@ -2,6 +2,31 @@
 
 All notable changes to the AIMax Viewer extension will be documented in this file.
 
+## [0.1.22] - 2026-02-19
+
+### Added
+- **Presenter Mode**: New "Present with AIMax Viewer" feature opens HTML slide decks in the system browser with a two-window presenter view (audience + speaker notes, carousel, timer)
+- **Explorer Context Menu**: "Present with AIMax Viewer" option when right-clicking HTML files
+- **Browser Hamburger Menu**: "Present in Browser" option to launch presenter mode for the currently viewed page
+- **Sidebar Context Menus**: "Present" option in both Artifacts and Recents panels (HTML files only)
+- **Extension-Bundled Presenter**: Slide presenter served from `/__presenter` route, always available regardless of workspace content
+
+### Technical
+- Added `/__presenter` HTTP route serving `slide-presenter.html` from extension bundle
+- New `aimaxViewer.presentFile` command registered in VS Code
+- Presenter uses `BroadcastChannel` for sync between audience and presenter windows
+
+---
+
+### Aggiunto (IT)
+- **Modalita' Presentazione**: Nuova funzionalita' "Present with AIMax Viewer" apre deck HTML nel browser di sistema con vista relatore a due finestre (audience + note speaker, carousel, timer)
+- **Menu Contestuale Explorer**: Opzione "Present with AIMax Viewer" sul click destro dei file HTML
+- **Menu Hamburger del Browser**: Opzione "Present in Browser" per lanciare la modalita' presentazione della pagina corrente
+- **Menu Contestuali Sidebar**: Opzione "Present" nei pannelli Artifacts e Recents (solo file HTML)
+- **Presenter Integrato nell'Estensione**: Slide presenter servito dalla route `/__presenter`, sempre disponibile indipendentemente dal contenuto del workspace
+
+---
+
 ## [0.1.21] - 2026-01-31
 
 ### Added

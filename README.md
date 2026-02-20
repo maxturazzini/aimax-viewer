@@ -3,7 +3,7 @@
 VS Code extension that provides automatic HTML/Markdown viewing at startup and an internal browser for localhost development.
 
 ![VS Code Marketplace](https://img.shields.io/badge/VS%20Code-1.80+-blue)
-![Version](https://img.shields.io/badge/version-0.1.17-green)
+![Version](https://img.shields.io/badge/version-0.1.22-green)
 ![License](https://img.shields.io/badge/license-MIT-brightgreen)
 
 ## Why use AIMax Viewer instead of external browser?
@@ -83,7 +83,27 @@ A `$(home)` icon in the status bar provides one-click access to your Home page.
 
 Each artifact opens in a new tab by default. Configure with `aimaxViewer.panels.multiTab`.
 
-### 9. Content Security Policy (CSP) for CDN Resources
+### 9. Presenter Mode
+
+Present HTML slide decks directly from VS Code. The presenter opens in your system browser with two synchronized windows:
+
+- **Audience Window** - Clean slide view for projection
+- **Presenter Window** - Current slide, next slide preview, speaker notes, thumbnail carousel, timer
+
+**How to use:**
+1. Right-click an HTML file in Explorer -> "Present with AIMax Viewer"
+2. Or from the AIMax browser hamburger menu -> "Present in Browser"
+3. Or right-click in Artifacts/Recents sidebar -> "Present"
+
+**Slide format:** Your HTML file should use `<section>` elements for slides. Add `.speaker-notes` elements inside sections for speaker notes.
+
+**Keyboard shortcuts** (in the presenter window):
+- `←` / `→` - Navigate slides
+- `F` - Toggle audience fullscreen
+- `T` - Start/stop timer
+- `Home` / `End` - First/last slide
+
+### 10. Content Security Policy (CSP) for CDN Resources
 
 By default, the viewer uses **permissive mode** allowing common CDN domains:
 - `fonts.googleapis.com` / `fonts.gstatic.com` - Google Fonts
@@ -129,7 +149,7 @@ This now works out-of-the-box in permissive mode!
 
 **Note**: Settings are in VS Code's user/workspace settings, not in the extension files.
 
-### 10. vscode:// URI Handler
+### 11. vscode:// URI Handler
 
 Deep links for use in HTML artifacts or external tools:
 

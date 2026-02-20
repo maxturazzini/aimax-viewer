@@ -1,0 +1,732 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI,MAX Slide Presenter</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+    <style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+    --blue: #004BFF;
+    --sky: #35C2FF;
+    --green: #00D35D;
+    --yellow: #F9C927;
+    --dark: #0a0a1a;
+    --gray: #1a1a2e;
+    --light: #F2F2F2;
+    --next-height: 35%;
+}
+
+body {
+    font-family: 'Inter', sans-serif;
+    background: var(--dark);
+    color: #fff;
+    height: 100vh;
+    overflow: hidden;
+    user-select: none;
+}
+
+/* === LAYOUT === */
+.presenter {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: 1fr auto auto;
+    height: 100vh;
+    gap: 12px;
+    padding: 12px;
+}
+
+/* === CURRENT SLIDE PREVIEW === */
+.current-slide {
+    grid-column: 1;
+    grid-row: 1;
+    background: #000;
+    border-radius: 8px;
+    overflow: hidden;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+}
+
+.current-slide .label {
+    background: var(--blue);
+    color: #fff;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 2px;
+    padding: 6px 14px;
+    text-transform: uppercase;
+}
+
+.current-slide .iframe-wrap {
+    flex: 1;
+    position: relative;
+    overflow: hidden;
+}
+
+.current-slide iframe {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 1280px;
+    height: 720px;
+    border: none;
+    pointer-events: none;
+    transform-origin: 0 0;
+}
+
+/* === NOTES PANEL === */
+.notes-panel {
+    grid-column: 2;
+    grid-row: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.next-slide {
+    background: #000;
+    border-radius: 8px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+    height: 45%;
+}
+
+.next-slide .label {
+    background: var(--gray);
+    color: #999;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 2px;
+    padding: 6px 14px;
+    text-transform: uppercase;
+    flex-shrink: 0;
+}
+
+.next-slide .iframe-wrap {
+    flex: 1;
+    position: relative;
+    overflow: hidden;
+}
+
+.next-slide iframe {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 1280px;
+    height: 720px;
+    border: none;
+    pointer-events: none;
+    transform-origin: 0 0;
+}
+
+/* === RESIZE HANDLE === */
+.resize-handle {
+    height: 8px;
+    cursor: row-resize;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.resize-handle::after {
+    content: '';
+    width: 40px;
+    height: 3px;
+    background: rgba(255,255,255,0.2);
+    border-radius: 2px;
+    transition: background 0.2s;
+}
+
+.resize-handle:hover::after,
+.resize-handle.dragging::after {
+    background: var(--sky);
+}
+
+.notes-content {
+    flex: 1;
+    background: var(--gray);
+    border-radius: 8px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    min-height: 60px;
+}
+
+.notes-content .label {
+    background: var(--yellow);
+    color: #000;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 2px;
+    padding: 6px 14px;
+    text-transform: uppercase;
+    flex-shrink: 0;
+}
+
+.notes-text {
+    flex: 1;
+    padding: 20px 24px;
+    font-size: 20px;
+    line-height: 1.7;
+    color: #eee;
+    overflow-y: auto;
+}
+
+/* === CAROUSEL === */
+.carousel {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    background: var(--gray);
+    border-radius: 8px;
+    padding: 6px 10px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    display: flex;
+    gap: 6px;
+    align-items: center;
+}
+
+.carousel-item {
+    flex: 0 0 auto;
+    width: 106px;
+    height: 60px;
+    background: #000;
+    border-radius: 4px;
+    overflow: hidden;
+    cursor: pointer;
+    border: 2px solid transparent;
+    transition: border-color 0.2s;
+    position: relative;
+}
+
+.carousel-item:hover {
+    border-color: rgba(255,255,255,0.3);
+}
+
+.carousel-item.active {
+    border-color: var(--blue);
+}
+
+.carousel-item iframe {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 1280px;
+    height: 720px;
+    border: none;
+    pointer-events: none;
+    transform-origin: 0 0;
+}
+
+.carousel-item .carousel-num {
+    position: absolute;
+    bottom: 2px;
+    right: 3px;
+    font-size: 8px;
+    font-weight: 600;
+    color: rgba(255,255,255,0.5);
+    z-index: 1;
+    opacity: 0;
+    transition: opacity 0.2s;
+}
+
+.carousel-item:hover .carousel-num,
+.carousel-item.active .carousel-num {
+    opacity: 1;
+}
+
+/* === BOTTOM BAR === */
+.bottom-bar {
+    grid-column: 1 / -1;
+    grid-row: 3;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: var(--gray);
+    border-radius: 8px;
+    padding: 10px 20px;
+    gap: 20px;
+}
+
+.slide-counter {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--sky);
+    min-width: 100px;
+}
+
+.slide-title {
+    flex: 1;
+    font-size: 14px;
+    color: #aaa;
+    text-align: center;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.controls {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+.controls button {
+    background: rgba(255,255,255,0.1);
+    color: #fff;
+    border: none;
+    padding: 8px 16px;
+    border-radius: 6px;
+    font-family: 'Inter', sans-serif;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.controls button:hover {
+    background: var(--blue);
+}
+
+.controls button.active {
+    background: var(--blue);
+}
+
+.timer {
+    font-size: 24px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    color: var(--green);
+    min-width: 80px;
+    text-align: right;
+}
+
+/* === STARTUP === */
+.startup {
+    position: fixed;
+    inset: 0;
+    background: var(--dark);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+    gap: 30px;
+}
+
+.startup h1 {
+    font-size: 32px;
+    font-weight: 800;
+    color: var(--blue);
+}
+
+.startup p {
+    color: #999;
+    font-size: 16px;
+    max-width: 500px;
+    text-align: center;
+    line-height: 1.6;
+}
+
+.startup .deck-input {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+}
+
+.startup input {
+    background: var(--gray);
+    border: 2px solid rgba(255,255,255,0.1);
+    color: #fff;
+    padding: 12px 20px;
+    border-radius: 8px;
+    font-family: 'Inter', sans-serif;
+    font-size: 16px;
+    width: 400px;
+    outline: none;
+}
+
+.startup input:focus {
+    border-color: var(--blue);
+}
+
+.startup .go-btn {
+    background: var(--blue);
+    color: #fff;
+    border: none;
+    padding: 12px 24px;
+    border-radius: 8px;
+    font-family: 'Inter', sans-serif;
+    font-size: 16px;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.startup .go-btn:hover {
+    background: #0040dd;
+}
+
+.hidden { display: none !important; }
+
+/* scrollbar */
+.notes-text::-webkit-scrollbar { width: 6px; }
+.notes-text::-webkit-scrollbar-track { background: transparent; }
+.notes-text::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 3px; }
+
+.carousel::-webkit-scrollbar { height: 3px; }
+.carousel::-webkit-scrollbar-track { background: transparent; }
+.carousel::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 2px; }
+    </style>
+</head>
+<body>
+
+<!-- STARTUP SCREEN -->
+<div class="startup" id="startup">
+    <h1>AI,MAX Slide Presenter</h1>
+    <p>Inserisci l'URL del deck HTML. Apre una finestra audience (proiettore) e qui vedi note + prossima slide.</p>
+    <div class="deck-input">
+        <input type="text" id="deckUrl" placeholder="http://127.0.0.1:3134/projects/.../w2.html" autofocus>
+        <button class="go-btn" onclick="startPresenter()">Avvia</button>
+    </div>
+    <p style="font-size: 13px; color: #666;">Tasti: ← → navigare | F fullscreen audience | T timer | Home/End prima/ultima</p>
+</div>
+
+<!-- PRESENTER VIEW -->
+<div class="presenter hidden" id="presenter">
+    <div class="current-slide" id="currentSlidePanel">
+        <div class="label">Slide corrente</div>
+        <div class="iframe-wrap">
+            <iframe id="currentFrame"></iframe>
+        </div>
+    </div>
+
+    <div class="notes-panel">
+        <div class="next-slide" id="nextSlidePanel">
+            <div class="label">Prossima</div>
+            <div class="iframe-wrap">
+                <iframe id="nextFrame"></iframe>
+            </div>
+        </div>
+        <div class="resize-handle" id="resizeHandle"></div>
+        <div class="notes-content">
+            <div class="label">Speaker Notes</div>
+            <div class="notes-text" id="notesText">&mdash;</div>
+        </div>
+    </div>
+
+    <div class="carousel" id="carousel"></div>
+
+    <div class="bottom-bar">
+        <div class="slide-counter" id="slideCounter">1 / ?</div>
+        <div class="slide-title" id="slideTitle"></div>
+        <div class="controls">
+            <button onclick="prevSlide()">← Prev</button>
+            <button onclick="nextSlide()">Next →</button>
+            <button id="timerBtn" onclick="toggleTimer()">Timer</button>
+        </div>
+        <div class="timer" id="timer">00:00</div>
+    </div>
+</div>
+
+<script>
+let audienceWin = null;
+let slides = [];
+let currentIndex = 0;
+let timerInterval = null;
+let timerSeconds = 0;
+let timerRunning = false;
+let deckBaseUrl = '';
+let channel = null;
+
+function startPresenter() {
+    const url = document.getElementById('deckUrl').value.trim();
+    if (!url) return;
+
+    deckBaseUrl = url;
+    document.getElementById('startup').classList.add('hidden');
+    document.getElementById('presenter').classList.remove('hidden');
+
+    // Open audience window
+    audienceWin = window.open(url, 'audience', 'width=1280,height=720');
+
+    // Set up BroadcastChannel
+    channel = new BroadcastChannel('slide-presenter');
+
+    // Load deck in hidden iframe to extract slides and notes
+    const loader = document.createElement('iframe');
+    loader.style.display = 'none';
+    loader.src = url;
+    document.body.appendChild(loader);
+
+    loader.onload = () => {
+        const doc = loader.contentDocument;
+        const sections = doc.querySelectorAll('section');
+        slides = [];
+        sections.forEach((s, i) => {
+            const h = s.querySelector('h1, h2');
+            const notesEl = s.querySelector('.speaker-notes');
+            slides.push({
+                index: i,
+                title: h ? h.textContent : `Slide ${i + 1}`,
+                notes: notesEl ? notesEl.textContent : '',
+                className: s.className
+            });
+        });
+        document.body.removeChild(loader);
+        buildCarousel();
+        goToSlide(0);
+    };
+
+    // Listen for audience scroll events
+    channel.onmessage = (e) => {
+        if (e.data.type === 'slideChanged' && e.data.source === 'audience') {
+            currentIndex = e.data.index;
+            updatePresenterView();
+        }
+    };
+
+    initResize();
+
+    // Observe panels for fit scaling
+    resizeObserver.observe(document.querySelector('#currentSlidePanel .iframe-wrap'));
+    resizeObserver.observe(document.querySelector('#nextSlidePanel .iframe-wrap'));
+    setTimeout(fitAllIframes, 100);
+}
+
+// === CAROUSEL ===
+function buildCarousel() {
+    const carousel = document.getElementById('carousel');
+    carousel.textContent = '';
+    slides.forEach((s, i) => {
+        const item = document.createElement('div');
+        item.className = 'carousel-item';
+        item.onclick = () => goToSlide(i);
+
+        const iframe = document.createElement('iframe');
+        iframe.src = deckBaseUrl;
+        iframe.onload = () => {
+            scrollIframeToSlide(iframe, i);
+            try {
+                const iframeDoc = iframe.contentDocument;
+                iframeDoc.documentElement.style.overflow = 'hidden';
+            } catch(e) {}
+        };
+        // Scale is set in CSS (1280x720 → 106x60 via transform-origin: 0 0)
+        iframe.style.transform = 'scale(' + (106 / 1280) + ')';
+
+        const num = document.createElement('div');
+        num.className = 'carousel-num';
+        num.textContent = i + 1;
+
+        item.appendChild(iframe);
+        item.appendChild(num);
+        carousel.appendChild(item);
+    });
+}
+
+function updateCarouselHighlight() {
+    const items = document.querySelectorAll('.carousel-item');
+    items.forEach((item, i) => {
+        item.classList.toggle('active', i === currentIndex);
+    });
+    // Scroll active item into view
+    const activeItem = items[currentIndex];
+    if (activeItem) {
+        activeItem.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+    }
+}
+
+// === FIT IFRAMES ===
+function fitIframe(iframe) {
+    const wrap = iframe.parentElement;
+    if (!wrap) return;
+    const wW = wrap.clientWidth;
+    const wH = wrap.clientHeight;
+    if (wW === 0 || wH === 0) return;
+    const scale = Math.min(wW / 1280, wH / 720);
+    iframe.style.transform = `scale(${scale})`;
+}
+
+function fitAllIframes() {
+    fitIframe(document.getElementById('currentFrame'));
+    fitIframe(document.getElementById('nextFrame'));
+}
+
+const resizeObserver = new ResizeObserver(() => fitAllIframes());
+
+// === RESIZE HANDLE ===
+function initResize() {
+    const handle = document.getElementById('resizeHandle');
+    const panel = document.querySelector('.notes-panel');
+    const nextPanel = document.getElementById('nextSlidePanel');
+    let startY = 0;
+    let startHeight = 0;
+
+    handle.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        startY = e.clientY;
+        startHeight = nextPanel.offsetHeight;
+        handle.classList.add('dragging');
+        document.addEventListener('mousemove', onDrag);
+        document.addEventListener('mouseup', onRelease);
+    });
+
+    function onDrag(e) {
+        const delta = e.clientY - startY;
+        const panelHeight = panel.offsetHeight;
+        const newHeight = Math.max(60, Math.min(panelHeight - 80, startHeight + delta));
+        nextPanel.style.height = newHeight + 'px';
+    }
+
+    function onRelease() {
+        handle.classList.remove('dragging');
+        document.removeEventListener('mousemove', onDrag);
+        document.removeEventListener('mouseup', onRelease);
+    }
+}
+
+function goToSlide(index) {
+    if (index < 0 || index >= slides.length) return;
+    currentIndex = index;
+    updatePresenterView();
+    // Tell audience to scroll
+    if (channel) {
+        channel.postMessage({ type: 'goToSlide', index: index, source: 'presenter' });
+    }
+    // Also scroll audience window directly
+    if (audienceWin && !audienceWin.closed) {
+        try {
+            const sections = audienceWin.document.querySelectorAll('section');
+            if (sections[index]) {
+                sections[index].scrollIntoView({ behavior: 'smooth' });
+            }
+        } catch(e) {}
+    }
+}
+
+function updatePresenterView() {
+    const slide = slides[currentIndex];
+    const nextSlideData = slides[currentIndex + 1];
+
+    // Counter
+    document.getElementById('slideCounter').textContent = `${currentIndex + 1} / ${slides.length}`;
+
+    // Title
+    document.getElementById('slideTitle').textContent = slide.title;
+
+    // Notes
+    document.getElementById('notesText').textContent = slide.notes || '(nessuna nota per questa slide)';
+
+    // Current slide iframe - scroll to section
+    const currentFrame = document.getElementById('currentFrame');
+    if (!currentFrame.src || !currentFrame.src.includes(deckBaseUrl.split('?')[0])) {
+        currentFrame.src = deckBaseUrl;
+        currentFrame.onload = () => { scrollIframeToSlide(currentFrame, currentIndex); fitIframe(currentFrame); };
+    } else {
+        scrollIframeToSlide(currentFrame, currentIndex);
+    }
+
+    // Next slide iframe
+    const nextFrame = document.getElementById('nextFrame');
+    if (nextSlideData) {
+        if (!nextFrame.src || !nextFrame.src.includes(deckBaseUrl.split('?')[0])) {
+            nextFrame.src = deckBaseUrl;
+            nextFrame.onload = () => { scrollIframeToSlide(nextFrame, currentIndex + 1); fitIframe(nextFrame); };
+        } else {
+            scrollIframeToSlide(nextFrame, currentIndex + 1);
+        }
+    }
+
+    // Carousel highlight
+    updateCarouselHighlight();
+}
+
+function scrollIframeToSlide(iframe, index) {
+    try {
+        const doc = iframe.contentDocument;
+        const sections = doc.querySelectorAll('section');
+        if (sections[index]) {
+            // Disable smooth scroll for instant jump in preview
+            doc.documentElement.style.scrollBehavior = 'auto';
+            doc.documentElement.style.scrollSnapType = 'none';
+            sections[index].scrollIntoView();
+            // Re-enable after a tick
+            setTimeout(() => {
+                doc.documentElement.style.scrollBehavior = 'smooth';
+                doc.documentElement.style.scrollSnapType = 'y mandatory';
+            }, 50);
+        }
+    } catch(e) {}
+}
+
+function nextSlide() {
+    goToSlide(currentIndex + 1);
+}
+
+function prevSlide() {
+    goToSlide(currentIndex - 1);
+}
+
+function toggleTimer() {
+    if (timerRunning) {
+        clearInterval(timerInterval);
+        timerRunning = false;
+        document.getElementById('timerBtn').classList.remove('active');
+    } else {
+        timerRunning = true;
+        document.getElementById('timerBtn').classList.add('active');
+        timerInterval = setInterval(() => {
+            timerSeconds++;
+            const m = String(Math.floor(timerSeconds / 60)).padStart(2, '0');
+            const s = String(timerSeconds % 60).padStart(2, '0');
+            document.getElementById('timer').textContent = `${m}:${s}`;
+        }, 1000);
+    }
+}
+
+// Keyboard navigation
+document.addEventListener('keydown', (e) => {
+    if (document.getElementById('startup').classList.contains('hidden')) {
+        if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'PageDown') {
+            e.preventDefault();
+            nextSlide();
+        } else if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
+            e.preventDefault();
+            prevSlide();
+        } else if (e.key === 'f' || e.key === 'F') {
+            // Fullscreen audience window
+            if (audienceWin && !audienceWin.closed) {
+                try {
+                    audienceWin.document.documentElement.requestFullscreen();
+                } catch(e) {}
+            }
+        } else if (e.key === 't' || e.key === 'T') {
+            toggleTimer();
+        } else if (e.key === 'Home') {
+            goToSlide(0);
+        } else if (e.key === 'End') {
+            goToSlide(slides.length - 1);
+        }
+    } else {
+        if (e.key === 'Enter') {
+            startPresenter();
+        }
+    }
+});
+
+// Check hash for deck URL (hash not sent to server, avoids 404)
+// Usage: slide-presenter.html#http://127.0.0.1:3134/path/to/deck.html
+const hashDeck = window.location.hash.slice(1);
+if (hashDeck) {
+    document.getElementById('deckUrl').value = decodeURIComponent(hashDeck);
+    startPresenter();
+}
+</script>
+</body>
+</html>

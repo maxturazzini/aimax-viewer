@@ -2,7 +2,7 @@
   "name": "aimax-viewer",
   "displayName": "AIMax Viewer",
   "description": "Auto-open Artifacts at startup + internal browser for localhost",
-  "version": "0.1.21",
+  "version": "0.1.22",
   "publisher": "aimax",
   "icon": "icon.png",
   "repository": {
@@ -51,6 +51,10 @@
       {
         "command": "aimaxViewer.openArtifactsBrowser",
         "title": "AIMax Viewer: Open Artifacts Browser"
+      },
+      {
+        "command": "aimaxViewer.presentFile",
+        "title": "Present with AIMax Viewer"
       },
       {
         "command": "aimaxViewer.openFromTree",
@@ -128,6 +132,11 @@
       "explorer/context": [
         {
           "command": "aimaxViewer.openFileInViewer",
+          "when": "resourceExtname == .html",
+          "group": "navigation"
+        },
+        {
+          "command": "aimaxViewer.presentFile",
           "when": "resourceExtname == .html",
           "group": "navigation"
         }

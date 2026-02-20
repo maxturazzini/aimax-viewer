@@ -146,6 +146,13 @@ export function activate(context: vscode.ExtensionContext) {
                     vscode.env.openExternal(vscode.Uri.parse(httpUrl));
                 }
                 break;
+            case 'presentFile':
+                if (workspaceFolder) {
+                    const httpUrl = getHttpUrl(fsPath, workspaceFolder);
+                    const presenterUrl = `http://127.0.0.1:${serverPort}/__presenter#${httpUrl}`;
+                    vscode.env.openExternal(vscode.Uri.parse(presenterUrl));
+                }
+                break;
             case 'revealInExplorer':
                 vscode.commands.executeCommand('revealInExplorer', uri);
                 break;
@@ -181,6 +188,13 @@ export function activate(context: vscode.ExtensionContext) {
                 if (workspaceFolder) {
                     const httpUrl = getHttpUrl(fsPath, workspaceFolder);
                     vscode.env.openExternal(vscode.Uri.parse(httpUrl));
+                }
+                break;
+            case 'presentFile':
+                if (workspaceFolder) {
+                    const httpUrl = getHttpUrl(fsPath, workspaceFolder);
+                    const presenterUrl = `http://127.0.0.1:${serverPort}/__presenter#${httpUrl}`;
+                    vscode.env.openExternal(vscode.Uri.parse(presenterUrl));
                 }
                 break;
             case 'revealInExplorer':
@@ -394,6 +408,32 @@ export function activate(context: vscode.ExtensionContext) {
         }
     });
 
+    // Present HTML file in system browser (presenter mode)
+    const presentFileCommand = vscode.commands.registerCommand('aimaxViewer.presentFile', (uri: vscode.Uri) => {
+        let filePath: string | undefined;
+        if (uri && uri.fsPath) {
+            filePath = uri.fsPath;
+        } else {
+            const editor = vscode.window.activeTextEditor;
+            if (editor) {
+                filePath = editor.document.uri.fsPath;
+            }
+        }
+        if (!filePath) {
+            vscode.window.showWarningMessage('No file selected');
+            return;
+        }
+        if (!filePath.endsWith('.html')) {
+            vscode.window.showWarningMessage('Presenter mode only works with HTML files');
+            return;
+        }
+        if (workspaceFolder) {
+            const httpUrl = getHttpUrl(filePath, workspaceFolder);
+            const presenterUrl = `http://127.0.0.1:${serverPort}/__presenter#${httpUrl}`;
+            vscode.env.openExternal(vscode.Uri.parse(presenterUrl));
+        }
+    });
+
     // Command: Open new terminal
     const openTerminalCommand = vscode.commands.registerCommand('aimaxViewer.openTerminal', () => {
         vscode.commands.executeCommand('workbench.action.terminal.new');
@@ -494,6 +534,7 @@ export function activate(context: vscode.ExtensionContext) {
         openHomeCommand,
         openCurrentFileCommand,
         openFileInViewerCommand,
+        presentFileCommand,
         openTerminalCommand,
         openClaudeCodeCommand,
         openArtifactsBrowserCommand,
@@ -582,6 +623,9 @@ function openInBrowser(url: string, customTitle?: string) {
                 vscode.commands.executeCommand('aimaxViewer.openTerminal');
             } else if (message.command === 'openClaudeCode') {
                 vscode.commands.executeCommand('aimaxViewer.openClaudeCode');
+            } else if (message.command === 'presentFile' && message.url) {
+                const presenterUrl = `http://127.0.0.1:${serverPort}/__presenter#${message.url}`;
+                vscode.env.openExternal(vscode.Uri.parse(presenterUrl));
             }
         });
 
@@ -623,6 +667,9 @@ function openInBrowser(url: string, customTitle?: string) {
                 vscode.commands.executeCommand('aimaxViewer.openTerminal');
             } else if (message.command === 'openClaudeCode') {
                 vscode.commands.executeCommand('aimaxViewer.openClaudeCode');
+            } else if (message.command === 'presentFile' && message.url) {
+                const presenterUrl = `http://127.0.0.1:${serverPort}/__presenter#${message.url}`;
+                vscode.env.openExternal(vscode.Uri.parse(presenterUrl));
             }
         });
     }
@@ -878,6 +925,7 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
         <button class="menu-item" onclick="copyUrl()">Copy URL</button>
         <!-- WIP: Export PDF disabled - needs VS Code file system API -->
         <button class="menu-item" onclick="openExternal()">Open in External Browser</button>
+        <button class="menu-item" onclick="presentInBrowser()">Present in Browser</button>
         <div class="menu-divider"></div>
         <button class="menu-item" onclick="goHome()">Go to Home</button>
         <button class="menu-item" onclick="openCurrentFile()">Open Current Editor File</button>
@@ -1099,6 +1147,11 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
 
         function openExternal() {
             vscode.postMessage({ command: 'openExternal', url: currentUrl });
+            toggleMenu();
+        }
+
+        function presentInBrowser() {
+            vscode.postMessage({ command: 'presentFile', url: currentUrl });
             toggleMenu();
         }
 
@@ -1441,6 +1494,23 @@ function startHttpServer(workspaceFolder: string) {
                 res.writeHead(500, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
                 res.end(JSON.stringify({ error: err.message }));
             });
+            return;
+        }
+
+        // Serve slide-presenter.html from extension bundle
+        if (url === '/__presenter' || url === '/__presenter/') {
+            const presenterPath = path.join(extensionContext.extensionPath, 'slide-presenter.html');
+            if (fs.existsSync(presenterPath)) {
+                const data = fs.readFileSync(presenterPath);
+                res.writeHead(200, {
+                    'Content-Type': 'text/html; charset=utf-8',
+                    'Access-Control-Allow-Origin': '*'
+                });
+                res.end(data);
+            } else {
+                res.writeHead(404, { 'Access-Control-Allow-Origin': '*' });
+                res.end('Presenter not found');
+            }
             return;
         }
 

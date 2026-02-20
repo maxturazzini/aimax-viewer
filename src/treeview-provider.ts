@@ -429,7 +429,7 @@ export class ArtifactsWebviewProvider implements vscode.WebviewViewProvider {
         border-radius: 4px;
         padding: 4px 0;
         min-width: 180px;
-        z-index: 1000;
+        z-index: 99999;
         box-shadow: 0 2px 8px rgba(0,0,0,0.35);
         font-size: 13px;
     }
@@ -611,6 +611,9 @@ export class ArtifactsWebviewProvider implements vscode.WebviewViewProvider {
                 addCtxItem('codicon-preview', 'Open in Viewer', 'openFile');
                 addCtxItem('codicon-edit', 'Open in Editor', 'openInEditor');
                 addCtxItem('codicon-globe', 'Open in Browser', 'openInBrowser');
+                if (fsPath.endsWith('.html')) {
+                    addCtxItem('codicon-broadcast', 'Present', 'presentFile');
+                }
                 const sep = document.createElement('div');
                 sep.className = 'ctx-sep';
                 ctxMenu.appendChild(sep);
@@ -625,6 +628,7 @@ export class ArtifactsWebviewProvider implements vscode.WebviewViewProvider {
             // Keep menu inside viewport
             const rect = ctxMenu.getBoundingClientRect();
             if (rect.right > window.innerWidth) ctxMenu.style.left = (window.innerWidth - rect.width - 4) + 'px';
+            if (rect.left < 0) ctxMenu.style.left = '4px';
             if (rect.bottom > window.innerHeight) ctxMenu.style.top = (window.innerHeight - rect.height - 4) + 'px';
         }
 
@@ -650,6 +654,7 @@ export class ArtifactsWebviewProvider implements vscode.WebviewViewProvider {
                 ctxMenu.classList.remove('open');
             }
         });
+        window.addEventListener('blur', () => ctxMenu.classList.remove('open'));
 
         vscode.postMessage({ command: 'ready' });
     </script>
