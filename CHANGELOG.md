@@ -2,7 +2,7 @@
 
 All notable changes to the AIMax Viewer extension will be documented in this file.
 
-## [0.1.22] - 2026-02-19
+## [0.1.22] - 2026-02-22
 
 ### Added
 - **Presenter Mode**: New "Present with AIMax Viewer" feature opens HTML slide decks in the system browser with a two-window presenter view (audience + speaker notes, carousel, timer)
@@ -10,11 +10,14 @@ All notable changes to the AIMax Viewer extension will be documented in this fil
 - **Browser Hamburger Menu**: "Present in Browser" option to launch presenter mode for the currently viewed page
 - **Sidebar Context Menus**: "Present" option in both Artifacts and Recents panels (HTML files only)
 - **Extension-Bundled Presenter**: Slide presenter served from `/__presenter` route, always available regardless of workspace content
+- **Recents Panel**: New sidebar panel between Artifacts and Apps Manager tracking the last 24 opened HTML/MD files per workspace
+- **Multi-Tab Dedup**: Reuses existing tab when the same file is opened again in multi-tab mode, avoiding duplicate panels
 
 ### Technical
 - Added `/__presenter` HTTP route serving `slide-presenter.html` from extension bundle
 - New `aimaxViewer.presentFile` command registered in VS Code
 - Presenter uses `BroadcastChannel` for sync between audience and presenter windows
+- New `RecentsProvider` WebviewView with workspace-scoped state persistence
 
 ---
 
@@ -24,6 +27,8 @@ All notable changes to the AIMax Viewer extension will be documented in this fil
 - **Menu Hamburger del Browser**: Opzione "Present in Browser" per lanciare la modalita' presentazione della pagina corrente
 - **Menu Contestuali Sidebar**: Opzione "Present" nei pannelli Artifacts e Recents (solo file HTML)
 - **Presenter Integrato nell'Estensione**: Slide presenter servito dalla route `/__presenter`, sempre disponibile indipendentemente dal contenuto del workspace
+- **Pannello Recenti**: Nuovo pannello nella sidebar tra Artifacts e Apps Manager che traccia gli ultimi 24 file HTML/MD aperti per workspace
+- **Dedup Multi-Tab**: Riutilizza il tab esistente quando lo stesso file viene riaperto in modalita' multi-tab, evitando pannelli duplicati
 
 ---
 
