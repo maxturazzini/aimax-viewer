@@ -930,7 +930,7 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
         <button class="menu-item" onclick="goHome()">Go to Home</button>
         <button class="menu-item" onclick="openCurrentFile()">Open Current Editor File</button>
     </div>
-    <iframe id="frame" src="${url}" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox"></iframe>
+    <iframe id="frame" src="${url}" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-top-navigation-by-user-activation"></iframe>
 
     <script>
         const vscode = acquireVsCodeApi();

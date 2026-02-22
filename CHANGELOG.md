@@ -13,6 +13,12 @@ All notable changes to the AIMax Viewer extension will be documented in this fil
 - **Recents Panel**: New sidebar panel between Artifacts and Apps Manager tracking the last 24 opened HTML/MD files per workspace
 - **Multi-Tab Dedup**: Reuses existing tab when the same file is opened again in multi-tab mode, avoiding duplicate panels
 
+### Changed
+- **iframe sandbox**: Added `allow-top-navigation-by-user-activation` so links and buttons inside artifacts work on user click
+- **Documentation**: Updated guides (EN/IT) to v0.1.22 with Presenter Mode, Recents panel, sidebar search, context menus
+- **Presentation Deck**: Added `aimax-viewer-presentation.html` — an 8-slide feature overview of AIMax Viewer
+- **Index page**: Added Presenter Mode card with link to the presentation deck
+
 ### Technical
 - Added `/__presenter` HTTP route serving `slide-presenter.html` from extension bundle
 - New `aimaxViewer.presentFile` command registered in VS Code

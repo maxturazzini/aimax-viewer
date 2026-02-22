@@ -31,10 +31,10 @@ body {
 /* === LAYOUT === */
 .presenter {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: 1fr 8px 1fr;
     grid-template-rows: 1fr auto auto;
     height: 100vh;
-    gap: 12px;
+    gap: 12px 0;
     padding: 12px;
 }
 
@@ -42,6 +42,7 @@ body {
 .current-slide {
     grid-column: 1;
     grid-row: 1;
+    margin-right: 6px;
     background: #000;
     border-radius: 8px;
     overflow: hidden;
@@ -77,10 +78,37 @@ body {
     transform-origin: 0 0;
 }
 
-/* === NOTES PANEL === */
-.notes-panel {
+/* === COLUMN RESIZE HANDLE === */
+.col-resize-handle {
     grid-column: 2;
     grid-row: 1;
+    width: 8px;
+    cursor: col-resize;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10;
+}
+
+.col-resize-handle::after {
+    content: '';
+    width: 3px;
+    height: 40px;
+    background: rgba(255,255,255,0.2);
+    border-radius: 2px;
+    transition: background 0.2s;
+}
+
+.col-resize-handle:hover::after,
+.col-resize-handle.dragging::after {
+    background: var(--sky);
+}
+
+/* === NOTES PANEL === */
+.notes-panel {
+    grid-column: 3;
+    grid-row: 1;
+    margin-left: 6px;
     display: flex;
     flex-direction: column;
     overflow: hidden;
@@ -372,6 +400,58 @@ body {
     background: #0040dd;
 }
 
+/* === OPTIONS BAR === */
+.options-bar {
+    display: flex;
+    gap: 6px;
+    padding: 6px 10px;
+    background: var(--gray);
+    border-radius: 0 0 8px 8px;
+    flex-shrink: 0;
+}
+
+.options-bar button {
+    background: rgba(255,255,255,0.08);
+    color: #888;
+    border: none;
+    padding: 4px 10px;
+    border-radius: 4px;
+    font-family: 'Inter', sans-serif;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.options-bar button:hover {
+    background: rgba(255,255,255,0.15);
+    color: #ccc;
+}
+
+.options-bar button.active {
+    background: var(--blue);
+    color: #fff;
+}
+
+/* === NOTES LIGHT THEME === */
+.notes-content.light {
+    background: #f0f0f0;
+}
+
+.notes-content.light .notes-text {
+    color: #222;
+}
+
+/* === CLOCK === */
+.clock {
+    font-size: 18px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    color: var(--light);
+    min-width: 50px;
+    text-align: right;
+}
+
 .hidden { display: none !important; }
 
 /* scrollbar */
@@ -404,7 +484,14 @@ body {
         <div class="iframe-wrap">
             <iframe id="currentFrame"></iframe>
         </div>
+        <div class="options-bar">
+            <button id="toggleDotsBtn" onclick="toggleDots()">● Dots</button>
+            <button id="toggleCarouselBtn" onclick="toggleCarousel()">▤ Carousel</button>
+            <button id="toggleNotesThemeBtn" onclick="toggleNotesTheme()">◑ Note chiare</button>
+        </div>
     </div>
+
+    <div class="col-resize-handle" id="colResizeHandle"></div>
 
     <div class="notes-panel">
         <div class="next-slide" id="nextSlidePanel">
@@ -429,8 +516,10 @@ body {
             <button onclick="prevSlide()">← Prev</button>
             <button onclick="nextSlide()">Next →</button>
             <button id="timerBtn" onclick="toggleTimer()">Timer</button>
+            <button onclick="resetTimer()">↺</button>
         </div>
         <div class="timer" id="timer">00:00</div>
+        <div class="clock" id="clock"></div>
     </div>
 </div>
 
@@ -443,6 +532,7 @@ let timerSeconds = 0;
 let timerRunning = false;
 let deckBaseUrl = '';
 let channel = null;
+let audienceReady = false;
 
 function startPresenter() {
     const url = document.getElementById('deckUrl').value.trim();
@@ -454,6 +544,23 @@ function startPresenter() {
 
     // Open audience window
     audienceWin = window.open(url, 'audience', 'width=1280,height=720');
+    audienceReady = false;
+
+    // Wait for audience window to load, then sync
+    if (audienceWin) {
+        const checkAudienceLoad = setInterval(() => {
+            try {
+                if (audienceWin.document && audienceWin.document.readyState === 'complete') {
+                    clearInterval(checkAudienceLoad);
+                    audienceReady = true;
+                    // Sync to current slide once audience is ready
+                    syncAudienceToSlide(currentIndex);
+                    // Return focus to presenter
+                    window.focus();
+                }
+            } catch(e) { clearInterval(checkAudienceLoad); }
+        }, 200);
+    }
 
     // Set up BroadcastChannel
     channel = new BroadcastChannel('slide-presenter');
@@ -481,6 +588,8 @@ function startPresenter() {
         document.body.removeChild(loader);
         buildCarousel();
         goToSlide(0);
+        // Return focus to presenter window
+        window.focus();
     };
 
     // Listen for audience scroll events
@@ -492,6 +601,7 @@ function startPresenter() {
     };
 
     initResize();
+    initColResize();
 
     // Observe panels for fit scaling
     resizeObserver.observe(document.querySelector('#currentSlidePanel .iframe-wrap'));
@@ -591,6 +701,24 @@ function initResize() {
     }
 }
 
+function syncAudienceToSlide(index) {
+    if (audienceWin && !audienceWin.closed) {
+        try {
+            const sections = audienceWin.document.querySelectorAll('section');
+            if (sections[index]) {
+                // Disable snap for instant jump, then re-enable
+                audienceWin.document.documentElement.style.scrollBehavior = 'auto';
+                audienceWin.document.documentElement.style.scrollSnapType = 'none';
+                sections[index].scrollIntoView();
+                setTimeout(() => {
+                    audienceWin.document.documentElement.style.scrollBehavior = 'smooth';
+                    audienceWin.document.documentElement.style.scrollSnapType = 'y mandatory';
+                }, 50);
+            }
+        } catch(e) {}
+    }
+}
+
 function goToSlide(index) {
     if (index < 0 || index >= slides.length) return;
     currentIndex = index;
@@ -599,15 +727,8 @@ function goToSlide(index) {
     if (channel) {
         channel.postMessage({ type: 'goToSlide', index: index, source: 'presenter' });
     }
-    // Also scroll audience window directly
-    if (audienceWin && !audienceWin.closed) {
-        try {
-            const sections = audienceWin.document.querySelectorAll('section');
-            if (sections[index]) {
-                sections[index].scrollIntoView({ behavior: 'smooth' });
-            }
-        } catch(e) {}
-    }
+    // Sync audience window
+    syncAudienceToSlide(index);
 }
 
 function updatePresenterView() {
@@ -641,6 +762,11 @@ function updatePresenterView() {
         } else {
             scrollIframeToSlide(nextFrame, currentIndex + 1);
         }
+    }
+
+    // Re-apply dots hiding if active
+    if (dotsHidden) {
+        setTimeout(() => reapplyDotsHiding(), 100);
     }
 
     // Carousel highlight
@@ -689,6 +815,130 @@ function toggleTimer() {
         }, 1000);
     }
 }
+
+// === COLUMN RESIZE ===
+function initColResize() {
+    const handle = document.getElementById('colResizeHandle');
+    const presenter = document.getElementById('presenter');
+    let startX = 0;
+    let startLeftWidth = 0;
+
+    handle.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        startX = e.clientX;
+        startLeftWidth = document.getElementById('currentSlidePanel').offsetWidth;
+        handle.classList.add('dragging');
+        document.addEventListener('mousemove', onDrag);
+        document.addEventListener('mouseup', onRelease);
+    });
+
+    function onDrag(e) {
+        const delta = e.clientX - startX;
+        const totalWidth = presenter.clientWidth - 24 - 8; // padding + handle
+        const newLeft = Math.max(200, Math.min(totalWidth - 200, startLeftWidth + delta));
+        const leftFr = newLeft / totalWidth;
+        const rightFr = 1 - leftFr;
+        presenter.style.gridTemplateColumns = `${leftFr}fr 8px ${rightFr}fr`;
+        fitAllIframes();
+    }
+
+    function onRelease() {
+        handle.classList.remove('dragging');
+        document.removeEventListener('mousemove', onDrag);
+        document.removeEventListener('mouseup', onRelease);
+    }
+}
+
+// === TOGGLE OPTIONS ===
+let dotsHidden = false;
+let carouselHidden = false;
+let notesLight = false;
+
+function toggleDots() {
+    dotsHidden = !dotsHidden;
+    document.getElementById('toggleDotsBtn').classList.toggle('active', dotsHidden);
+    const hideCSS = `
+        .slide-dots, .nav-dots, .dot-nav, .progress-dots,
+        [class*="dot-indicator"], [class*="slide-nav"] .dot,
+        nav[class*="dot"], .dots, .slide-indicators,
+        [class*="pagination-dot"], .nav-bullets,
+        [style*="position: fixed"][style*="right"] { display: none !important; visibility: hidden !important; }
+    `;
+    applyToAllIframes((doc) => {
+        let style = doc.getElementById('presenter-hide-dots');
+        if (dotsHidden) {
+            if (!style) {
+                style = doc.createElement('style');
+                style.id = 'presenter-hide-dots';
+                style.textContent = hideCSS;
+                doc.head.appendChild(style);
+            }
+        } else {
+            if (style) style.remove();
+        }
+    });
+}
+
+function reapplyDotsHiding() {
+    const hideCSS = `
+        .slide-dots, .nav-dots, .dot-nav, .progress-dots,
+        [class*="dot-indicator"], [class*="slide-nav"] .dot,
+        nav[class*="dot"], .dots, .slide-indicators,
+        [class*="pagination-dot"], .nav-bullets,
+        [style*="position: fixed"][style*="right"] { display: none !important; visibility: hidden !important; }
+    `;
+    applyToAllIframes((doc) => {
+        if (!doc.getElementById('presenter-hide-dots')) {
+            const style = doc.createElement('style');
+            style.id = 'presenter-hide-dots';
+            style.textContent = hideCSS;
+            doc.head.appendChild(style);
+        }
+    });
+}
+
+function toggleCarousel() {
+    carouselHidden = !carouselHidden;
+    document.getElementById('toggleCarouselBtn').classList.toggle('active', carouselHidden);
+    document.getElementById('carousel').classList.toggle('hidden', carouselHidden);
+    fitAllIframes();
+}
+
+function toggleNotesTheme() {
+    notesLight = !notesLight;
+    document.getElementById('toggleNotesThemeBtn').classList.toggle('active', notesLight);
+    document.querySelector('.notes-content').classList.toggle('light', notesLight);
+}
+
+function applyToAllIframes(fn) {
+    const iframes = document.querySelectorAll('#currentFrame, #nextFrame');
+    iframes.forEach(iframe => {
+        try { fn(iframe.contentDocument); } catch(e) {}
+    });
+    // Also audience window
+    if (audienceWin && !audienceWin.closed) {
+        try { fn(audienceWin.document); } catch(e) {}
+    }
+}
+
+// === TIMER RESET ===
+function resetTimer() {
+    timerSeconds = 0;
+    document.getElementById('timer').textContent = '00:00';
+    if (timerRunning) {
+        clearInterval(timerInterval);
+        timerRunning = false;
+        document.getElementById('timerBtn').classList.remove('active');
+    }
+}
+
+// === CLOCK ===
+function updateClock() {
+    const now = new Date();
+    document.getElementById('clock').textContent = now.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' });
+}
+setInterval(updateClock, 1000);
+updateClock();
 
 // Keyboard navigation
 document.addEventListener('keydown', (e) => {
