@@ -468,6 +468,8 @@ export function wrapMarkdownHtml(content: string, title: string, metadata?: Reco
     <script>
         const copyIconSvg = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>';
         const checkIconSvg = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="3"><path d="M20 6L9 17l-5-5"/></svg>';
+        let _vscode;
+        try { _vscode = acquireVsCodeApi(); } catch(e) {}
         function copyCode(btn) {
             const code = btn.parentElement.querySelector('code').textContent;
 
@@ -477,29 +479,14 @@ export function wrapMarkdownHtml(content: string, title: string, metadata?: Reco
                 setTimeout(() => { btn.innerHTML = copyIconSvg; btn.title = 'Copy code'; }, 2000);
             };
 
-            const fallbackCopy = () => {
-                const textarea = document.createElement('textarea');
-                textarea.value = code;
-                textarea.style.cssText = 'position:fixed;top:0;left:0;opacity:0;pointer-events:none;';
-                document.body.appendChild(textarea);
-                textarea.focus();
-                textarea.select();
-                const success = document.execCommand('copy');
-                document.body.removeChild(textarea);
-                return success;
-            };
-
-            // Try clipboard API, fall back to execCommand
-            if (navigator.clipboard && navigator.clipboard.writeText) {
-                navigator.clipboard.writeText(code)
-                    .then(showSuccess)
-                    .catch(() => {
-                        // Clipboard API failed, try fallback
-                        if (fallbackCopy()) showSuccess();
-                    });
-            } else {
-                // No clipboard API, use fallback directly
-                if (fallbackCopy()) showSuccess();
+            if (_vscode) {
+                _vscode.postMessage({ command: 'copyToClipboard', text: code });
+                showSuccess();
+            } else if (window.parent !== window) {
+                window.parent.postMessage({ command: 'copyToClipboard', text: code }, '*');
+                showSuccess();
+            } else if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(code).then(showSuccess).catch(showSuccess);
             }
         }
 

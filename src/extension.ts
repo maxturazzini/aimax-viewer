@@ -613,7 +613,9 @@ function openInBrowser(url: string, customTitle?: string) {
 
         // Handle messages from webview
         newPanel.webview.onDidReceiveMessage(message => {
-            if (message.command === 'openExternal' && message.url) {
+            if (message.command === 'copyToClipboard') {
+                vscode.env.clipboard.writeText(message.text || '');
+            } else if (message.command === 'openExternal' && message.url) {
                 vscode.env.openExternal(vscode.Uri.parse(message.url));
             } else if (message.command === 'updateTitle' && message.title) {
                 newPanel.title = message.title;
@@ -655,7 +657,9 @@ function openInBrowser(url: string, customTitle?: string) {
 
         // Handle messages from webview
         browserPanel.webview.onDidReceiveMessage(message => {
-            if (message.command === 'openExternal' && message.url) {
+            if (message.command === 'copyToClipboard') {
+                vscode.env.clipboard.writeText(message.text || '');
+            } else if (message.command === 'openExternal' && message.url) {
                 vscode.env.openExternal(vscode.Uri.parse(message.url));
             } else if (message.command === 'updateTitle' && message.title) {
                 if (browserPanel) {
@@ -1074,7 +1078,7 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
         }
 
         function copyUrl() {
-            navigator.clipboard.writeText(currentUrl);
+            vscode.postMessage({ command: 'copyToClipboard', text: currentUrl });
             toggleMenu();
         }
 
@@ -1223,11 +1227,13 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
             }
         };
 
-        // Listen for metadata from iframe content (postMessage from markdown pages)
+        // Listen for metadata and clipboard requests from iframe content
         window.addEventListener('message', (event) => {
             if (event.data?.type === 'aimaxMetadata' && event.data.metadata) {
                 console.log('[AIMax] Received metadata via postMessage:', event.data.metadata);
                 updateInfoTooltip(currentUrl, event.data.metadata);
+            } else if (event.data?.command === 'copyToClipboard') {
+                vscode.postMessage({ command: 'copyToClipboard', text: event.data.text });
             }
         });
 
@@ -1677,7 +1683,9 @@ function openArtifactsHome(workspaceFolder: string, homePage: string = 'Artifact
 
         // Handle link clicks and toolbar buttons
         homePanel.webview.onDidReceiveMessage(message => {
-            if (message.command === 'openUrl') {
+            if (message.command === 'copyToClipboard') {
+                vscode.env.clipboard.writeText(message.text || '');
+            } else if (message.command === 'openUrl') {
                 const url = message.url;
                 console.log('[AIMax] Link clicked:', url);
                 if (url.startsWith('vscode://')) {

@@ -2,6 +2,14 @@
 
 All notable changes to the AIMax Viewer extension will be documented in this file.
 
+## [0.1.23] - 2026-03-10
+
+### Fixed
+- **Copy to clipboard**: risolto in home panel (markdown) e browser panel. `navigator.clipboard` non disponibile nel webview VS Code — ora delegato a `vscode.env.clipboard` tramite postMessage bridge
+- **Copy URL**: fix stesso problema nella toolbar del browser panel — il pulsante "Copy URL" nel menu ora funziona correttamente
+
+---
+
 ## [0.1.22] - 2026-02-22
 
 ### Added
