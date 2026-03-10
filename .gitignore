@@ -12,3 +12,4 @@ PLAN-*.md
 TODO.md
 deploy.sh
 playwright.config.ts
+scripts/.browser-session/

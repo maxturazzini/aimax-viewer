@@ -3,7 +3,7 @@
   "displayName": "AIMax Viewer",
   "description": "Auto-open Artifacts at startup + internal browser for localhost",
   "version": "0.1.22",
-  "publisher": "aimax",
+  "publisher": "maxturazzini",
   "icon": "icon.png",
   "repository": {
     "type": "git",

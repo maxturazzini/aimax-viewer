@@ -119,7 +119,19 @@ git commit -m "release: vX.Y.Z - brief description"
 git push origin main
 ```
 
-### 5. Create GitHub Release
+### 5. Publish to VS Code Marketplace
+```bash
+# Publisher: maxturazzini
+# PAT token saved in ~/.claude/secrets/vsce-pat.txt (expires ~2027-03-10, renew from dev.azure.com/maxturazzini)
+npx vsce publish --allow-missing-repository --pat <PAT_TOKEN>
+
+# Extension URL (live after ~5 min):
+# https://marketplace.visualstudio.com/items?itemName=maxturazzini.aimax-viewer
+# Management:
+# https://marketplace.visualstudio.com/manage/publishers/maxturazzini
+```
+
+### 6. Create GitHub Release
 ```bash
 # IMPORTANT: Ensure correct account is active
 gh auth switch --user maxturazzini
