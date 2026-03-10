@@ -3,7 +3,7 @@
 VS Code extension that provides automatic HTML/Markdown viewing at startup and an internal browser for localhost development.
 
 ![VS Code Marketplace](https://img.shields.io/badge/VS%20Code-1.80+-blue)
-![Version](https://img.shields.io/badge/version-0.1.22-green)
+![Version](https://img.shields.io/badge/version-0.1.23-green)
 ![License](https://img.shields.io/badge/license-MIT-brightgreen)
 
 ## Why use AIMax Viewer instead of external browser?
