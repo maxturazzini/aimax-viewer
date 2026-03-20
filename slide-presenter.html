@@ -501,25 +501,26 @@ body {
 <!-- STARTUP SCREEN -->
 <div class="startup" id="startup">
     <h1>AI,MAX Slide Presenter</h1>
-    <p>Inserisci l'URL del deck HTML. Apre una finestra audience (proiettore) e qui vedi note + prossima slide.</p>
+    <p>Enter the HTML deck URL. Opens an audience window (projector) &mdash; here you see notes + next slide.</p>
     <div class="deck-input">
         <input type="text" id="deckUrl" placeholder="http://127.0.0.1:3134/projects/.../w2.html" autofocus>
-        <button class="go-btn" onclick="startPresenter()">Avvia</button>
+        <button class="go-btn" onclick="startPresenter()">Start</button>
     </div>
-    <p style="font-size: 13px; color: #666;">Tasti: ← → navigare | F fullscreen audience | T timer | Home/End prima/ultima</p>
+    <p style="font-size: 13px; color: #666;">Keys: ← → navigate | F fullscreen audience | T timer | +/- notes font | Home/End first/last</p>
 </div>
 
 <!-- PRESENTER VIEW -->
 <div class="presenter hidden" id="presenter">
     <div class="current-slide" id="currentSlidePanel">
-        <div class="label">Slide corrente</div>
+        <div class="label">Current Slide</div>
         <div class="iframe-wrap">
             <iframe id="currentFrame"></iframe>
         </div>
         <div class="options-bar">
             <button id="toggleDotsBtn" onclick="toggleDots()">● Dots</button>
             <button id="toggleCarouselBtn" onclick="toggleCarousel()">▤ Carousel</button>
-            <button id="toggleNotesThemeBtn" onclick="toggleNotesTheme()">◑ Note chiare</button>
+            <button id="toggleNotesThemeBtn" onclick="toggleNotesTheme()">◑ Light Notes</button>
+            <button id="toggleSwapBtn" onclick="toggleSwapLayout()">⇅ Swap Layout</button>
         </div>
     </div>
 
@@ -527,7 +528,7 @@ body {
 
     <div class="notes-panel">
         <div class="next-slide" id="nextSlidePanel">
-            <div class="label">Prossima</div>
+            <div class="label">Next</div>
             <div class="iframe-wrap">
                 <iframe id="nextFrame"></iframe>
             </div>
@@ -536,8 +537,8 @@ body {
         <div class="notes-content">
             <div class="label">Speaker Notes
                 <span class="notes-font-controls">
-                    <button onclick="changeNotesFontSize(-2)" title="Riduci font">A&minus;</button>
-                    <button onclick="changeNotesFontSize(2)" title="Aumenta font">A+</button>
+                    <button onclick="changeNotesFontSize(-2)" title="Decrease font">A&minus;</button>
+                    <button onclick="changeNotesFontSize(2)" title="Increase font">A+</button>
                 </span>
             </div>
             <div class="notes-text" id="notesText" contenteditable="true">&mdash;</div>
@@ -727,7 +728,8 @@ function initResize() {
     function onDrag(e) {
         const delta = e.clientY - startY;
         const panelHeight = panel.offsetHeight;
-        const newHeight = Math.max(60, Math.min(panelHeight - 80, startHeight + delta));
+        const effectiveDelta = layoutSwapped ? -delta : delta;
+        const newHeight = Math.max(60, Math.min(panelHeight - 80, startHeight + effectiveDelta));
         nextPanel.style.height = newHeight + 'px';
     }
 
@@ -780,7 +782,7 @@ function updatePresenterView() {
 
     // Notes
     const notesEl = document.getElementById('notesText');
-    notesEl.innerText = slide.notes || '(nessuna nota per questa slide)';
+    notesEl.innerText = slide.notes || '(no notes for this slide)';
     notesEl.style.fontSize = notesFontSize + 'px';
 
     // Current slide iframe - scroll to section
@@ -893,6 +895,7 @@ let dotsHidden = false;
 let carouselHidden = false;
 let notesLight = false;
 let notesFontSize = 20;
+let layoutSwapped = false;
 
 function toggleDots() {
     dotsHidden = !dotsHidden;
@@ -948,6 +951,23 @@ function toggleNotesTheme() {
     notesLight = !notesLight;
     document.getElementById('toggleNotesThemeBtn').classList.toggle('active', notesLight);
     document.querySelector('.notes-content').classList.toggle('light', notesLight);
+}
+
+function toggleSwapLayout() {
+    layoutSwapped = !layoutSwapped;
+    document.getElementById('toggleSwapBtn').classList.toggle('active', layoutSwapped);
+    const panel = document.querySelector('.notes-panel');
+    const notes = document.querySelector('.notes-content');
+    const next = document.getElementById('nextSlidePanel');
+    const handle = document.getElementById('resizeHandle');
+    if (layoutSwapped) {
+        panel.insertBefore(notes, panel.firstChild);
+        panel.insertBefore(handle, next);
+    } else {
+        panel.insertBefore(next, panel.firstChild);
+        panel.insertBefore(handle, notes);
+    }
+    fitAllIframes();
 }
 
 function changeNotesFontSize(delta) {
