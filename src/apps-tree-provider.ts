@@ -138,6 +138,7 @@ export class AppsTreeProvider implements vscode.TreeDataProvider<AppsTreeItemTyp
     private refreshTimer?: ReturnType<typeof setInterval>;
     private cachedStatuses: AppStatus[] = [];
     private cachedDiscovered: DiscoveredApp[] = [];
+    private _refreshing = false;
 
     constructor(appsManager: AppsManager, refreshInterval: number) {
         this.appsManager = appsManager;
@@ -154,8 +155,13 @@ export class AppsTreeProvider implements vscode.TreeDataProvider<AppsTreeItemTyp
     }
 
     refresh(): void {
+        // Guard: skip if a refresh is already in progress
+        if (this._refreshing) { return; }
+        this._refreshing = true;
         this.loadStatuses().then(() => {
             this._onDidChangeTreeData.fire(undefined);
+        }).finally(() => {
+            this._refreshing = false;
         });
     }
 

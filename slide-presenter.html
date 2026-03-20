@@ -195,6 +195,32 @@ body {
     padding: 6px 14px;
     text-transform: uppercase;
     flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.notes-font-controls {
+    display: inline-flex;
+    gap: 4px;
+}
+
+.notes-font-controls button {
+    background: rgba(0,0,0,0.15);
+    border: none;
+    color: #000;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 3px;
+    cursor: pointer;
+    line-height: 1;
+    text-transform: none;
+    letter-spacing: 0;
+}
+
+.notes-font-controls button:hover {
+    background: rgba(0,0,0,0.3);
 }
 
 .notes-text {
@@ -204,6 +230,12 @@ body {
     line-height: 1.7;
     color: #eee;
     overflow-y: auto;
+    outline: none;
+    cursor: text;
+}
+
+.notes-text:focus {
+    box-shadow: inset 0 0 0 2px var(--yellow);
 }
 
 /* === CAROUSEL === */
@@ -502,8 +534,13 @@ body {
         </div>
         <div class="resize-handle" id="resizeHandle"></div>
         <div class="notes-content">
-            <div class="label">Speaker Notes</div>
-            <div class="notes-text" id="notesText">&mdash;</div>
+            <div class="label">Speaker Notes
+                <span class="notes-font-controls">
+                    <button onclick="changeNotesFontSize(-2)" title="Riduci font">A&minus;</button>
+                    <button onclick="changeNotesFontSize(2)" title="Aumenta font">A+</button>
+                </span>
+            </div>
+            <div class="notes-text" id="notesText" contenteditable="true">&mdash;</div>
         </div>
     </div>
 
@@ -742,7 +779,9 @@ function updatePresenterView() {
     document.getElementById('slideTitle').textContent = slide.title;
 
     // Notes
-    document.getElementById('notesText').textContent = slide.notes || '(nessuna nota per questa slide)';
+    const notesEl = document.getElementById('notesText');
+    notesEl.innerText = slide.notes || '(nessuna nota per questa slide)';
+    notesEl.style.fontSize = notesFontSize + 'px';
 
     // Current slide iframe - scroll to section
     const currentFrame = document.getElementById('currentFrame');
@@ -853,6 +892,7 @@ function initColResize() {
 let dotsHidden = false;
 let carouselHidden = false;
 let notesLight = false;
+let notesFontSize = 20;
 
 function toggleDots() {
     dotsHidden = !dotsHidden;
@@ -910,6 +950,11 @@ function toggleNotesTheme() {
     document.querySelector('.notes-content').classList.toggle('light', notesLight);
 }
 
+function changeNotesFontSize(delta) {
+    notesFontSize = Math.max(12, Math.min(40, notesFontSize + delta));
+    document.getElementById('notesText').style.fontSize = notesFontSize + 'px';
+}
+
 function applyToAllIframes(fn) {
     const iframes = document.querySelectorAll('#currentFrame, #nextFrame');
     iframes.forEach(iframe => {
@@ -940,9 +985,24 @@ function updateClock() {
 setInterval(updateClock, 1000);
 updateClock();
 
+// Save notes edits in real-time
+document.getElementById('notesText').addEventListener('input', () => {
+    if (slides[currentIndex]) {
+        slides[currentIndex].notes = document.getElementById('notesText').innerText;
+    }
+});
+
 // Keyboard navigation
 document.addEventListener('keydown', (e) => {
+    // Skip navigation shortcuts when editing notes
+    const editingNotes = document.activeElement === document.getElementById('notesText');
     if (document.getElementById('startup').classList.contains('hidden')) {
+        if (editingNotes) {
+            if (e.key === 'Escape') {
+                document.getElementById('notesText').blur();
+            }
+            return; // Let normal typing work
+        }
         if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'PageDown') {
             e.preventDefault();
             nextSlide();
@@ -962,6 +1022,10 @@ document.addEventListener('keydown', (e) => {
             goToSlide(0);
         } else if (e.key === 'End') {
             goToSlide(slides.length - 1);
+        } else if (e.key === '+' || e.key === '=') {
+            changeNotesFontSize(2);
+        } else if (e.key === '-') {
+            changeNotesFontSize(-2);
         }
     } else {
         if (e.key === 'Enter') {

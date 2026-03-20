@@ -2,7 +2,7 @@
   "name": "aimax-viewer",
   "displayName": "AIMax Viewer",
   "description": "Auto-open Artifacts at startup + internal browser for localhost",
-  "version": "0.1.23",
+  "version": "0.1.24",
   "publisher": "maxturazzini",
   "icon": "icon.png",
   "repository": {
@@ -303,8 +303,8 @@
         },
         "aimaxViewer.appsManager.refreshInterval": {
           "type": "number",
-          "default": 5000,
-          "description": "Auto-refresh interval in milliseconds (0 to disable)"
+          "default": 30000,
+          "description": "Auto-refresh interval in milliseconds (0 to disable). Min recommended: 10000"
         },
         "aimaxViewer.appsManager.apps": {
           "type": "array",

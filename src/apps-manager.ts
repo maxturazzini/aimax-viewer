@@ -35,6 +35,10 @@ export class AppsManager {
     private workspaceRoot: string;
     private runningProcesses: Map<string, ChildProcess> = new Map();
     private startTimes: Map<string, number> = new Map();
+    private _portsQueryRunning = false;
+    private _cachedPorts: { port: number; pid: number; process: string }[] = [];
+    private _cachedPortsTime = 0;
+    private static PORTS_CACHE_TTL = 4000; // ms - cache lsof results to avoid spawn storms
 
     constructor(workspaceRoot: string) {
         this.workspaceRoot = workspaceRoot;
@@ -198,38 +202,59 @@ export class AppsManager {
     }
 
     async getPortsInUse(): Promise<{ port: number; pid: number; process: string }[]> {
-        return new Promise((resolve) => {
-            exec('lsof -iTCP -sTCP:LISTEN -P -n', (error, stdout) => {
-                if (error) {
-                    resolve([]);
-                    return;
-                }
+        // Return cached results if fresh enough (avoids spawn storms / EBADF)
+        const now = Date.now();
+        if (now - this._cachedPortsTime < AppsManager.PORTS_CACHE_TTL && this._cachedPorts.length > 0) {
+            return this._cachedPorts;
+        }
 
-                const ports: { port: number; pid: number; process: string }[] = [];
-                const lines = stdout.split('\n').slice(1); // Skip header
+        // Guard: if a query is already running, return stale cache
+        if (this._portsQueryRunning) {
+            return this._cachedPorts;
+        }
 
-                for (const line of lines) {
-                    const parts = line.trim().split(/\s+/);
-                    if (parts.length >= 9) {
-                        const processName = parts[0];
-                        const pid = parseInt(parts[1], 10);
-                        const address = parts[8];
+        this._portsQueryRunning = true;
 
-                        // Extract port from address (e.g., "127.0.0.1:3124" or "*:3124")
-                        const portMatch = address.match(/:(\d+)$/);
-                        if (portMatch) {
-                            const port = parseInt(portMatch[1], 10);
-                            // Avoid duplicates
-                            if (!ports.find(p => p.port === port && p.pid === pid)) {
-                                ports.push({ port, pid, process: processName });
+        try {
+            const ports = await new Promise<{ port: number; pid: number; process: string }[]>((resolve) => {
+                exec('lsof -iTCP -sTCP:LISTEN -P -n', (error, stdout) => {
+                    if (error) {
+                        resolve([]);
+                        return;
+                    }
+
+                    const result: { port: number; pid: number; process: string }[] = [];
+                    const lines = stdout.split('\n').slice(1); // Skip header
+
+                    for (const line of lines) {
+                        const parts = line.trim().split(/\s+/);
+                        if (parts.length >= 9) {
+                            const processName = parts[0];
+                            const pid = parseInt(parts[1], 10);
+                            const address = parts[8];
+
+                            // Extract port from address (e.g., "127.0.0.1:3124" or "*:3124")
+                            const portMatch = address.match(/:(\d+)$/);
+                            if (portMatch) {
+                                const port = parseInt(portMatch[1], 10);
+                                // Avoid duplicates
+                                if (!result.find(p => p.port === port && p.pid === pid)) {
+                                    result.push({ port, pid, process: processName });
+                                }
                             }
                         }
                     }
-                }
 
-                resolve(ports);
+                    resolve(result);
+                });
             });
-        });
+
+            this._cachedPorts = ports;
+            this._cachedPortsTime = Date.now();
+            return ports;
+        } finally {
+            this._portsQueryRunning = false;
+        }
     }
 
     async discoverApps(): Promise<DiscoveredApp[]> {

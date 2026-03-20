@@ -45,7 +45,7 @@ function getConfig() {
             { label: 'Artifacts', path: 'Artifacts' }
         ]),
         appsManagerEnabled: config.get<boolean>('appsManager.enabled', true),
-        appsManagerRefreshInterval: config.get<number>('appsManager.refreshInterval', 5000),
+        appsManagerRefreshInterval: config.get<number>('appsManager.refreshInterval', 30000),
         // ZeroUI layout options
         startupOpenClaudeCode: config.get<boolean>('startup.openClaudeCode', false),
         startupFocusSidebar: config.get<boolean>('startup.focusSidebar', true)

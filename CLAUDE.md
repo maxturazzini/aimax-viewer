@@ -121,9 +121,9 @@ git push origin main
 
 ### 5. Publish to VS Code Marketplace
 ```bash
-# Publisher: maxturazzini
-# PAT token saved in ~/.claude/secrets/vsce-pat.txt (expires ~2027-03-10, renew from dev.azure.com/maxturazzini)
-npx vsce publish --allow-missing-repository --pat <PAT_TOKEN>
+# Publisher: maxturazzini (AIMax)
+# PAT token: ~/.claude/secrets/vsce-pat.txt (expires ~2027-03-10, rinnova su dev.azure.com/maxturazzini)
+npx vsce publish --allow-missing-repository --pat $(cat ~/.claude/secrets/vsce-pat.txt)
 
 # Extension URL (live after ~5 min):
 # https://marketplace.visualstudio.com/items?itemName=maxturazzini.aimax-viewer
