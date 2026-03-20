@@ -2,7 +2,7 @@
   "name": "aimax-viewer",
   "displayName": "AIMax Viewer",
   "description": "Auto-open Artifacts at startup + internal browser for localhost",
-  "version": "0.1.24",
+  "version": "0.1.25",
   "publisher": "maxturazzini",
   "icon": "icon.png",
   "repository": {
