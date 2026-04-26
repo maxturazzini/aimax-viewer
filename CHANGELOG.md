@@ -2,6 +2,36 @@
 
 All notable changes to the AIMax Viewer extension will be documented in this file.
 
+## [0.1.26] - 2026-04-26
+
+### Added
+- **Annotation Mode**: Toolbar toggle (chat-bubble icon) in Browser Panel and Home Panel that turns the preview into a feedback-capture surface. Hover any element to see a devtools-style label (tag, dimensions, color, font); click to attach a multi-line comment via auto-growing textarea (Enter submits, Shift+Enter newline, Esc cancels).
+- **Floating Annotation List**: Compact single-row list with click-through removal (×), hover tooltip showing full details, and Copy/Clear actions. Numbered badges follow the annotated elements through scroll/resize.
+- **Auto-Generated Edit Prompt**: Copy builds a structured prompt wrapped in `<annotation n="…">` blocks with selector, element snapshot, and `<request>` tags — ready to paste into any AI for iterative edits. Prompt references the actual file path (HTTP URL for served artifacts, absolute filesystem path for the Home Panel).
+- **HTTP Server Raw Endpoint**: `?aimax-raw=1` query param skips annotation-client injection and returns markdown sources untouched (groundwork for future tooling).
+
+### Technical
+- New `src/annotation-client.ts` containing the self-contained, idempotent overlay client injected into every served HTML/MD response and into Home Panel content.
+- Cross-origin iframe + same-document Home Panel use one shared client and a uniform `postMessage` protocol (`annot:toggle` / `annot:add` / `annot:remove` / `annot:reset`).
+- Sentinel attribute (`data-aimax-overlay`) prevents the client from highlighting its own UI or the Home Panel toolbar/floating window.
+- Hover label and comment input fall back to viewport coordinates `(10, 10)` when the target element would push them off-screen (e.g. clicking `body`).
+
+---
+
+## [0.1.25] - 2026-03-20
+
+### Added
+- **Speaker Notes Font Resize**: A-/A+ buttons in the yellow bar to increase or decrease notes font size (also via +/- keyboard shortcuts)
+- **Speaker Notes Editing**: Click on notes text to edit in-place (contenteditable); changes persist across slide navigation within the session; Escape to exit editing
+- **Swap Layout Toggle**: New button in options bar to swap notes and next-slide vertical positions in the presenter right panel
+
+### Changed
+- **Presenter GUI in English**: All labels, buttons, and help text translated from Italian to English
+- **Apps Manager Performance**: Cached `lsof` results with 4s TTL to prevent spawn storms; added refresh guard to avoid concurrent tree rebuilds
+- **Apps Manager Refresh Interval**: Default refresh interval increased from 5s to 30s for lower resource usage
+
+---
+
 ## [0.1.23] - 2026-03-10
 
 ### Fixed

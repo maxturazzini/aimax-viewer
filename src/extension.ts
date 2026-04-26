@@ -4,6 +4,7 @@ import * as path from 'path';
 import * as http from 'http';
 import { execFile, spawn } from 'child_process';
 import { parseMarkdown, wrapMarkdownHtml, extractFrontmatter } from './markdown-parser';
+import { ANNOTATION_CLIENT_JS, injectAnnotationClient } from './annotation-client';
 import { ArtifactsTreeProvider, ArtifactsWebviewProvider, ArtifactItem, FolderConfig } from './treeview-provider';
 import { RecentsWebviewProvider } from './recents-provider';
 import { AppsManager } from './apps-manager';
@@ -891,6 +892,106 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
             }
             body { height: auto; background: white; }
         }
+        .toolbar-btn.active {
+            color: #00d4ff;
+            border-color: #00d4ff;
+            background: rgba(0, 212, 255, 0.12);
+        }
+        .annot-window {
+            display: none;
+            position: fixed;
+            top: 56px;
+            right: 12px;
+            width: 380px;
+            max-height: 70vh;
+            background: #1e1e1e;
+            border: 1px solid #00d4ff;
+            border-radius: 8px;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+            z-index: 100002;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        .annot-window.open { display: flex; }
+        .annot-header {
+            background: linear-gradient(90deg, #16213e 0%, #1a1a2e 100%);
+            padding: 8px 12px;
+            color: #cccccc;
+            font-size: 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            border-bottom: 1px solid #3c3c3c;
+        }
+        .annot-header strong { color: #00d4ff; flex: 1; }
+        .annot-header button {
+            background: transparent;
+            border: 1px solid #3c3c3c;
+            color: #cccccc;
+            font-size: 11px;
+            cursor: pointer;
+            padding: 3px 8px;
+            border-radius: 4px;
+        }
+        .annot-header button:hover { color: #00d4ff; border-color: #00d4ff; }
+        .annot-body {
+            flex: 1;
+            overflow: auto;
+            padding: 6px 0;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            font-size: 12px;
+            color: #cccccc;
+            background: #14141a;
+        }
+        .annot-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 12px;
+            border-bottom: 1px solid #232330;
+            cursor: default;
+        }
+        .annot-row:hover { background: #1f1f2c; }
+        .annot-num {
+            background: #00d4ff;
+            color: #001018;
+            font-weight: bold;
+            font-size: 10px;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+        .annot-text {
+            flex: 1;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .annot-tag {
+            color: #888;
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-size: 10px;
+            flex-shrink: 0;
+        }
+        .annot-x {
+            color: #888;
+            cursor: pointer;
+            padding: 0 4px;
+            flex-shrink: 0;
+            font-size: 14px;
+            line-height: 1;
+        }
+        .annot-x:hover { color: #ff5757; }
+        .annot-empty {
+            color: #666;
+            font-style: italic;
+            padding: 12px;
+            text-align: center;
+        }
     </style>
 </head>
 <body>
@@ -916,6 +1017,9 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
             </button>
         </div>
         `}
+        <button class="toolbar-btn" id="annotBtn" onclick="toggleAnnotMode()" title="Toggle annotation mode">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#00d4ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        </button>
         <button class="toolbar-btn" onclick="openTerminal()" title="Open new terminal">
             <span style="color: #00d4ff; font-size: 14px;">&gt;</span>
         </button>
@@ -923,6 +1027,15 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
             <span style="color: #ff9500; font-size: 20px; line-height: 1;">*</span>
         </button>
         <button class="menu-btn" onclick="toggleMenu()">☰</button>
+    </div>
+    <div class="annot-window" id="annotWindow">
+        <div class="annot-header">
+            <strong id="annotCount">Annotations (0)</strong>
+            <button onclick="copyAnnotPrompt()" title="Copy prompt">Copy</button>
+            <button onclick="clearAnnotations()" title="Clear all">Clear</button>
+            <button onclick="toggleAnnotMode(false)" title="Close">×</button>
+        </div>
+        <div class="annot-body" id="annotBody"><div class="annot-empty">Hover an element and click to add a comment.</div></div>
     </div>
     <div class="menu" id="menu">
         <button class="menu-item" onclick="reload()">Reload</button>
@@ -934,7 +1047,7 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
         <button class="menu-item" onclick="goHome()">Go to Home</button>
         <button class="menu-item" onclick="openCurrentFile()">Open Current Editor File</button>
     </div>
-    <iframe id="frame" src="${url}" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-top-navigation-by-user-activation"></iframe>
+    <iframe id="frame" src="${url}" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-top-navigation-by-user-activation allow-downloads" allow="clipboard-read; clipboard-write; fullscreen"></iframe>
 
     <script>
         const vscode = acquireVsCodeApi();
@@ -1227,13 +1340,134 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
             }
         };
 
-        // Listen for metadata and clipboard requests from iframe content
+        // Annotation mode state
+        let annotActive = false;
+        let annotations = [];
+        const annotWindow = document.getElementById('annotWindow');
+        const annotBody = document.getElementById('annotBody');
+        const annotCount = document.getElementById('annotCount');
+        const annotBtn = document.getElementById('annotBtn');
+
+        function toggleAnnotMode(forceState) {
+            const next = (typeof forceState === 'boolean') ? forceState : !annotActive;
+            annotActive = next;
+            annotBtn.classList.toggle('active', annotActive);
+            annotWindow.classList.toggle('open', annotActive);
+            try {
+                frame.contentWindow.postMessage({ type: 'annot:toggle', on: annotActive }, '*');
+            } catch (err) {}
+        }
+
+        function basenameFromUrl(u) {
+            try { return decodeURIComponent(u.split('/').pop().split('?')[0] || u); }
+            catch (e) { return u; }
+        }
+
+        function escapeHtml(s) {
+            return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+        }
+
+        function annotEntryDetails(a) {
+            const info = a.info || {};
+            const dim = (info.width || 0) + 'x' + (info.height || 0);
+            const meta = '<' + info.tag + '>' + (info.text ? ' "' + info.text + '"' : '') +
+                ' (' + dim + (info.color ? ', color ' + info.color : '') +
+                (info.font ? ', font ' + info.font : '') + ')';
+            return 'Selector: ' + a.selector + '\\nElement: ' + meta + '\\nRequest: ' + a.comment;
+        }
+
+        function buildPromptText() {
+            if (annotations.length === 0) return '';
+            const href = annotations[0].href || currentUrl;
+            const lines = [
+                'Modify the file ' + href + '.',
+                'Apply each <request> below to its element (use Selector first, fall back to the Element description). Do not change anything else.',
+                ''
+            ];
+            annotations.forEach((a, i) => {
+                const info = a.info || {};
+                const dim = (info.width || 0) + 'x' + (info.height || 0);
+                const meta = '<' + info.tag + '>' + (info.text ? ' "' + info.text + '"' : '') +
+                    ' (' + dim + (info.color ? ', color ' + info.color : '') +
+                    (info.font ? ', font ' + info.font : '') + ')';
+                lines.push('<annotation n="' + (i + 1) + '">');
+                lines.push('Selector: ' + a.selector);
+                lines.push('Element: ' + meta);
+                lines.push('<request>' + a.comment + '</request>');
+                lines.push('</annotation>');
+                lines.push('');
+            });
+            return lines.join('\\n');
+        }
+
+        function renderAnnotations() {
+            annotCount.textContent = 'Annotations (' + annotations.length + ')';
+            if (annotations.length === 0) {
+                annotBody.innerHTML = '<div class="annot-empty">Hover an element and click to add a comment.</div>';
+                return;
+            }
+            const rows = annotations.map((a, i) => {
+                const tag = (a.info && a.info.tag) ? a.info.tag : 'el';
+                const details = annotEntryDetails(a);
+                return '<div class="annot-row" title="' + escapeHtml(details) + '">' +
+                    '<span class="annot-num">' + (i + 1) + '</span>' +
+                    '<span class="annot-text">' + escapeHtml(a.comment) + '</span>' +
+                    '<span class="annot-tag">&lt;' + escapeHtml(tag) + '&gt;</span>' +
+                    '<span class="annot-x" data-n="' + a.n + '" title="Remove">×</span>' +
+                    '</div>';
+            }).join('');
+            annotBody.innerHTML = rows;
+            annotBody.querySelectorAll('.annot-x').forEach(x => {
+                x.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const n = parseInt(x.getAttribute('data-n'), 10);
+                    removeAnnotation(n);
+                    try { frame.contentWindow.postMessage({ type: 'annot:remove', n }, '*'); } catch (err) {}
+                });
+            });
+        }
+
+        function copyAnnotPrompt() {
+            const text = buildPromptText();
+            if (!text) return;
+            vscode.postMessage({ command: 'copyToClipboard', text: text });
+            const orig = annotCount.textContent;
+            annotCount.textContent = '✓ Copied to clipboard';
+            setTimeout(() => { annotCount.textContent = orig; }, 1200);
+        }
+
+        function clearAnnotations() {
+            annotations = [];
+            renderAnnotations();
+            try {
+                frame.contentWindow.postMessage({ type: 'annot:reset' }, '*');
+            } catch (err) {}
+        }
+
+        function removeAnnotation(n) {
+            annotations = annotations.filter(a => a.n !== n);
+            renderAnnotations();
+        }
+
+        // Listen for metadata, clipboard requests, and annotations from iframe content
         window.addEventListener('message', (event) => {
             if (event.data?.type === 'aimaxMetadata' && event.data.metadata) {
                 console.log('[AIMax] Received metadata via postMessage:', event.data.metadata);
                 updateInfoTooltip(currentUrl, event.data.metadata);
             } else if (event.data?.command === 'copyToClipboard') {
                 vscode.postMessage({ command: 'copyToClipboard', text: event.data.text });
+            } else if (event.data?.type === 'annot:add') {
+                annotations.push(event.data);
+                renderAnnotations();
+            } else if (event.data?.type === 'annot:remove' && typeof event.data.n === 'number') {
+                removeAnnotation(event.data.n);
+            }
+        });
+
+        // Re-assert annotation mode on iframe load (new page = fresh client)
+        frame.addEventListener('load', () => {
+            if (annotActive) {
+                try { frame.contentWindow.postMessage({ type: 'annot:toggle', on: true }, '*'); } catch (e) {}
             }
         });
 
@@ -1530,7 +1764,13 @@ function startHttpServer(workspaceFolder: string) {
             return;
         }
 
-        const filePath = path.join(workspaceFolder, decodeURIComponent(url));
+        // Parse query string to detect raw mode (skip injection, return source)
+        const qIdx = url.indexOf('?');
+        const pathPart = qIdx >= 0 ? url.slice(0, qIdx) : url;
+        const queryPart = qIdx >= 0 ? url.slice(qIdx + 1) : '';
+        const isRaw = /(^|&)aimax-raw=1(&|$)/.test(queryPart);
+
+        const filePath = path.join(workspaceFolder, decodeURIComponent(pathPart));
 
         // Security: only serve files within workspace
         if (!filePath.startsWith(workspaceFolder)) {
@@ -1548,13 +1788,21 @@ function startHttpServer(workspaceFolder: string) {
 
         const ext = path.extname(filePath).toLowerCase();
 
-        // Handle Markdown files: convert to HTML
+        // Handle Markdown files: convert to HTML (or return raw .md when ?aimax-raw=1)
         if (ext === '.md' || ext === '.markdown') {
             try {
                 const rawContent = fs.readFileSync(filePath, 'utf-8');
+                if (isRaw) {
+                    res.writeHead(200, {
+                        'Content-Type': 'text/plain; charset=utf-8',
+                        'Access-Control-Allow-Origin': '*'
+                    });
+                    res.end(rawContent);
+                    return;
+                }
                 const { content, metadata } = extractFrontmatter(rawContent);
                 const title = (metadata?.title as string) || path.basename(filePath, ext).replace(/_/g, ' ');
-                const html = wrapMarkdownHtml(parseMarkdown(content), title, metadata);
+                const html = injectAnnotationClient(wrapMarkdownHtml(parseMarkdown(content), title, metadata));
                 res.writeHead(200, {
                     'Content-Type': 'text/html; charset=utf-8',
                     'Access-Control-Allow-Origin': '*'
@@ -1576,13 +1824,20 @@ function startHttpServer(workspaceFolder: string) {
             }
 
             const contentType = mimeTypes[ext] || 'application/octet-stream';
-            res.writeHead(200, {
+            const headers = {
                 'Content-Type': contentType,
                 'Access-Control-Allow-Origin': '*',
                 'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
                 'Access-Control-Allow-Headers': 'Content-Type'
-            });
-            res.end(data);
+            };
+            if ((ext === '.html' || ext === '.htm') && !isRaw) {
+                const injected = injectAnnotationClient(data.toString('utf-8'));
+                res.writeHead(200, headers);
+                res.end(injected);
+            } else {
+                res.writeHead(200, headers);
+                res.end(data);
+            }
         });
     });
 
@@ -1726,11 +1981,11 @@ function openArtifactsHome(workspaceFolder: string, homePage: string = 'Artifact
     const faviconPath = vscode.Uri.joinPath(extensionContext.extensionUri, 'icon.png');
     const faviconUri = homePanel.webview.asWebviewUri(faviconPath).toString();
 
-    homePanel.webview.html = wrapWithToolbarAndLinkHandler(htmlContent, 'Artifacts Home', faviconUri);
+    homePanel.webview.html = wrapWithToolbarAndLinkHandler(htmlContent, 'Artifacts Home', faviconUri, indexPath);
 }
 
 // Wrap HTML with toolbar and inject link handler
-function wrapWithToolbarAndLinkHandler(html: string, title: string, faviconUri: string): string {
+function wrapWithToolbarAndLinkHandler(html: string, title: string, faviconUri: string, filePath: string = ''): string {
     const toolbarStyles = `
     <style>
         .aimax-toolbar {
@@ -1799,14 +2054,115 @@ function wrapWithToolbarAndLinkHandler(html: string, title: string, faviconUri: 
             padding: 4px 6px;
         }
         .aimax-info-btn:hover { color: #00d4ff; }
+        .aimax-toolbar-btn.active {
+            color: #00d4ff;
+            border-color: #00d4ff;
+            background: rgba(0, 212, 255, 0.12);
+        }
         .aimax-content-wrapper {
             padding-top: 44px;
+        }
+        .aimax-annot-window {
+            display: none;
+            position: fixed;
+            top: 56px;
+            right: 12px;
+            width: 380px;
+            max-height: 70vh;
+            background: #1e1e1e;
+            border: 1px solid #00d4ff;
+            border-radius: 8px;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+            z-index: 100002;
+            flex-direction: column;
+            overflow: hidden;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        }
+        .aimax-annot-window.open { display: flex; }
+        .aimax-annot-header {
+            background: linear-gradient(90deg, #16213e 0%, #1a1a2e 100%);
+            padding: 8px 12px;
+            color: #cccccc;
+            font-size: 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            border-bottom: 1px solid #3c3c3c;
+        }
+        .aimax-annot-header strong { color: #00d4ff; flex: 1; }
+        .aimax-annot-header button {
+            background: transparent;
+            border: 1px solid #3c3c3c;
+            color: #cccccc;
+            font-size: 11px;
+            cursor: pointer;
+            padding: 3px 8px;
+            border-radius: 4px;
+        }
+        .aimax-annot-header button:hover { color: #00d4ff; border-color: #00d4ff; }
+        .aimax-annot-body {
+            flex: 1;
+            overflow: auto;
+            padding: 6px 0;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            font-size: 12px;
+            color: #cccccc;
+            background: #14141a;
+        }
+        .aimax-annot-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 12px;
+            border-bottom: 1px solid #232330;
+            cursor: default;
+        }
+        .aimax-annot-row:hover { background: #1f1f2c; }
+        .aimax-annot-num {
+            background: #00d4ff;
+            color: #001018;
+            font-weight: bold;
+            font-size: 10px;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+        .aimax-annot-text {
+            flex: 1;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .aimax-annot-tag {
+            color: #888;
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-size: 10px;
+            flex-shrink: 0;
+        }
+        .aimax-annot-x {
+            color: #888;
+            cursor: pointer;
+            padding: 0 4px;
+            flex-shrink: 0;
+            font-size: 14px;
+            line-height: 1;
+        }
+        .aimax-annot-x:hover { color: #ff5757; }
+        .aimax-annot-empty {
+            color: #666;
+            font-style: italic;
+            padding: 12px;
+            text-align: center;
         }
     </style>
     `;
 
     const toolbar = `
-    <div class="aimax-toolbar">
+    <div class="aimax-toolbar" data-aimax-overlay="1">
         <img src="${faviconUri}" class="aimax-brand-icon" onclick="goHome()" alt="AI, MAX" title="Home" />
         <button class="aimax-nav-btn" id="backBtn" onclick="goBack()" title="Back" disabled>←</button>
         <button class="aimax-nav-btn" id="fwdBtn" onclick="goForward()" title="Forward" disabled>→</button>
@@ -1815,12 +2171,24 @@ function wrapWithToolbarAndLinkHandler(html: string, title: string, faviconUri: 
         <button class="aimax-toolbar-btn" onclick="openArtifactsBrowser()" title="Open Artifacts Browser">
             <span style="font-size: 12px;">[:]</span>
         </button>
+        <button class="aimax-toolbar-btn" id="aimaxAnnotBtn" onclick="aimaxToggleAnnot()" title="Toggle annotation mode">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#00d4ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        </button>
         <button class="aimax-toolbar-btn" onclick="openTerminal()" title="Open new terminal">
             <span style="font-family: monospace; font-weight: bold;">&gt;_</span>
         </button>
         <button class="aimax-toolbar-btn" onclick="openClaudeCode()" title="New Claude Code conversation">
             <span style="color: #ff9500; font-size: 20px; line-height: 1;">*</span>
         </button>
+    </div>
+    <div class="aimax-annot-window" id="aimaxAnnotWindow" data-aimax-overlay="1">
+        <div class="aimax-annot-header">
+            <strong id="aimaxAnnotCount">Annotations (0)</strong>
+            <button onclick="aimaxCopyAnnotPrompt()" title="Copy prompt">Copy</button>
+            <button onclick="aimaxClearAnnot()" title="Clear all">Clear</button>
+            <button onclick="aimaxToggleAnnot(false)" title="Close">×</button>
+        </div>
+        <div class="aimax-annot-body" id="aimaxAnnotBody"><div class="aimax-annot-empty">Hover an element and click to add a comment.</div></div>
     </div>
     `;
 
@@ -1877,6 +2245,121 @@ function wrapWithToolbarAndLinkHandler(html: string, title: string, faviconUri: 
                 vscode.postMessage({ command: 'navigateLocal', path: href.replace('../', '') });
             }
         });
+
+        // Annotation mode (Home Panel: same-document, no iframe)
+        let aimaxAnnotActive = false;
+        let aimaxAnnotations = [];
+        const aimaxAnnotWindow = document.getElementById('aimaxAnnotWindow');
+        const aimaxAnnotBody = document.getElementById('aimaxAnnotBody');
+        const aimaxAnnotCount = document.getElementById('aimaxAnnotCount');
+        const aimaxAnnotBtn = document.getElementById('aimaxAnnotBtn');
+
+        function aimaxToggleAnnot(forceState) {
+            const next = (typeof forceState === 'boolean') ? forceState : !aimaxAnnotActive;
+            aimaxAnnotActive = next;
+            aimaxAnnotBtn.classList.toggle('active', aimaxAnnotActive);
+            aimaxAnnotWindow.classList.toggle('open', aimaxAnnotActive);
+            window.postMessage({ type: 'annot:toggle', on: aimaxAnnotActive }, '*');
+        }
+
+        function aimaxEsc(s) {
+            return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+        }
+
+        function aimaxEntryDetails(a) {
+            const info = a.info || {};
+            const dim = (info.width || 0) + 'x' + (info.height || 0);
+            const meta = '<' + info.tag + '>' + (info.text ? ' "' + info.text + '"' : '') +
+                ' (' + dim + (info.color ? ', color ' + info.color : '') +
+                (info.font ? ', font ' + info.font : '') + ')';
+            return 'Selector: ' + a.selector + '\\nElement: ' + meta + '\\nRequest: ' + a.comment;
+        }
+
+        function aimaxBuildPrompt() {
+            if (aimaxAnnotations.length === 0) return '';
+            const href = aimaxAnnotations[0].href || location.href;
+            const lines = [
+                'Modify the file ' + href + '.',
+                'Apply each <request> below to its element (use Selector first, fall back to the Element description). Do not change anything else.',
+                ''
+            ];
+            aimaxAnnotations.forEach((a, i) => {
+                const info = a.info || {};
+                const dim = (info.width || 0) + 'x' + (info.height || 0);
+                const meta = '<' + info.tag + '>' + (info.text ? ' "' + info.text + '"' : '') +
+                    ' (' + dim + (info.color ? ', color ' + info.color : '') +
+                    (info.font ? ', font ' + info.font : '') + ')';
+                lines.push('<annotation n="' + (i + 1) + '">');
+                lines.push('Selector: ' + a.selector);
+                lines.push('Element: ' + meta);
+                lines.push('<request>' + a.comment + '</request>');
+                lines.push('</annotation>');
+                lines.push('');
+            });
+            return lines.join('\\n');
+        }
+
+        function aimaxRenderAnnot() {
+            aimaxAnnotCount.textContent = 'Annotations (' + aimaxAnnotations.length + ')';
+            if (aimaxAnnotations.length === 0) {
+                aimaxAnnotBody.innerHTML = '<div class="aimax-annot-empty">Hover an element and click to add a comment.</div>';
+                return;
+            }
+            const rows = aimaxAnnotations.map((a, i) => {
+                const tag = (a.info && a.info.tag) ? a.info.tag : 'el';
+                const details = aimaxEntryDetails(a);
+                return '<div class="aimax-annot-row" title="' + aimaxEsc(details) + '">' +
+                    '<span class="aimax-annot-num">' + (i + 1) + '</span>' +
+                    '<span class="aimax-annot-text">' + aimaxEsc(a.comment) + '</span>' +
+                    '<span class="aimax-annot-tag">&lt;' + aimaxEsc(tag) + '&gt;</span>' +
+                    '<span class="aimax-annot-x" data-n="' + a.n + '" title="Remove">×</span>' +
+                    '</div>';
+            }).join('');
+            aimaxAnnotBody.innerHTML = rows;
+            aimaxAnnotBody.querySelectorAll('.aimax-annot-x').forEach(x => {
+                x.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const n = parseInt(x.getAttribute('data-n'), 10);
+                    aimaxRemoveAnnot(n);
+                    window.postMessage({ type: 'annot:remove', n }, '*');
+                });
+            });
+        }
+
+        function aimaxCopyAnnotPrompt() {
+            const text = aimaxBuildPrompt();
+            if (!text) return;
+            vscode.postMessage({ command: 'copyToClipboard', text: text });
+            const orig = aimaxAnnotCount.textContent;
+            aimaxAnnotCount.textContent = '✓ Copied to clipboard';
+            setTimeout(() => { aimaxAnnotCount.textContent = orig; }, 1200);
+        }
+
+        function aimaxClearAnnot() {
+            aimaxAnnotations = [];
+            aimaxRenderAnnot();
+            window.postMessage({ type: 'annot:reset' }, '*');
+        }
+
+        function aimaxRemoveAnnot(n) {
+            aimaxAnnotations = aimaxAnnotations.filter(a => a.n !== n);
+            aimaxRenderAnnot();
+        }
+
+        const aimaxKnownFilePath = ${JSON.stringify(filePath)};
+
+        window.addEventListener('message', (event) => {
+            if (event.data?.type === 'annot:add') {
+                const data = aimaxKnownFilePath ? { ...event.data, href: aimaxKnownFilePath } : event.data;
+                aimaxAnnotations.push(data);
+                aimaxRenderAnnot();
+            } else if (event.data?.type === 'annot:remove' && typeof event.data.n === 'number') {
+                aimaxRemoveAnnot(event.data.n);
+            }
+        });
+
+        // Inline annotation client (same-document mode)
+        ${ANNOTATION_CLIENT_JS}
     </script>
     `;
 

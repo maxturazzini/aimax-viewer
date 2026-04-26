@@ -3,7 +3,7 @@
 VS Code extension that provides automatic HTML/Markdown viewing at startup and an internal browser for localhost development.
 
 ![VS Code Marketplace](https://img.shields.io/badge/VS%20Code-1.80+-blue)
-![Version](https://img.shields.io/badge/version-0.1.25-green)
+![Version](https://img.shields.io/badge/version-0.1.26-green)
 ![License](https://img.shields.io/badge/license-MIT-brightgreen)
 
 ## Why use AIMax Viewer instead of external browser?
@@ -14,6 +14,7 @@ VS Code extension that provides automatic HTML/Markdown viewing at startup and a
 - **Markdown support** - `.md` files rendered as styled HTML automatically
 - **AI integration** - Quick access buttons for terminal and Claude Code
 - **Deep links** - `vscode://` URI protocol for automation
+- **Annotation mode** - Hover any element, click to comment, copy a structured prompt to feed back into your AI
 
 ## Features
 
@@ -111,7 +112,38 @@ Present HTML slide decks directly from VS Code. The presenter opens in your syst
 - `+` / `-` - Increase/decrease notes font size
 - `Home` / `End` - First/last slide
 
-### 10. Content Security Policy (CSP) for CDN Resources
+### 10. Annotation Mode
+
+A devtools-like overlay that turns the preview into a structured feedback channel for your AI.
+
+**How it works:**
+1. Click the chat-bubble icon in the toolbar to enter annotation mode.
+2. Hover any element to see its tag, dimensions, color, and font.
+3. Click the element to attach a free-form comment (multi-line, auto-growing).
+4. Repeat on as many elements as you want — each gets a numbered badge in the page.
+5. Click **Copy** to copy a ready-to-paste prompt.
+
+**Generated prompt format:**
+
+```
+Modify the file <path>.
+Apply each <request> below to its element (use Selector first, fall back to the Element description). Do not change anything else.
+
+<annotation n="1">
+Selector: body > section > h1
+Element: <h1> "Your headline" (550x84, color #F9C927, font 76px Inter)
+<request>make the title 30% bigger</request>
+</annotation>
+```
+
+**Other shortcuts:**
+- Single click on a numbered badge in the page → remove that annotation.
+- Click `×` next to a row in the floating list → same effect.
+- `Enter` submits a comment, `Shift+Enter` adds a newline, `Esc` cancels.
+
+Works in both Browser Panel (any artifact opened from the dropdown / TreeView / agent URI) and Home Panel (the landing page).
+
+### 11. Content Security Policy (CSP) for CDN Resources
 
 By default, the viewer uses **permissive mode** allowing common CDN domains:
 - `fonts.googleapis.com` / `fonts.gstatic.com` - Google Fonts
@@ -157,7 +189,7 @@ This now works out-of-the-box in permissive mode!
 
 **Note**: Settings are in VS Code's user/workspace settings, not in the extension files.
 
-### 11. vscode:// URI Handler
+### 12. vscode:// URI Handler
 
 Deep links for use in HTML artifacts or external tools:
 
