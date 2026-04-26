@@ -122,7 +122,7 @@ git push origin main
 ### 5. Publish to VS Code Marketplace
 ```bash
 # Publisher: maxturazzini (AIMax)
-# PAT token: ~/.claude/secrets/vsce-pat.txt (expires ~2027-03-10, rinnova su dev.azure.com/maxturazzini)
+# PAT token: ~/.claude/secrets/vsce-pat.txt (expires 2027-04-22, rinnova su dev.azure.com/maxturazzini)
 npx vsce publish --allow-missing-repository --pat $(cat ~/.claude/secrets/vsce-pat.txt)
 
 # Extension URL (live after ~5 min):
