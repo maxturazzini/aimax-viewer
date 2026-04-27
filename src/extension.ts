@@ -116,7 +116,7 @@ export function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(statusBarItem);
 
     // Register WebviewView for sidebar layout (with search bar)
-    webviewProvider = new ArtifactsWebviewProvider(workspaceFolder, config.browserFolders, context.extensionUri);
+    webviewProvider = new ArtifactsWebviewProvider(workspaceFolder, config.browserFolders, context.extensionUri, context.workspaceState);
     const webviewRegistration = vscode.window.registerWebviewViewProvider('aimaxViewer.artifactsTree', webviewProvider);
     context.subscriptions.push(webviewRegistration);
 

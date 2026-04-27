@@ -169,10 +169,14 @@ export class ArtifactsTreeProvider implements vscode.TreeDataProvider<ArtifactIt
     }
 }
 
+type SortMode = 'name-asc' | 'mtime-desc';
+const SORT_MODE_KEY = 'aimaxViewer.sortMode';
+
 interface FileNode {
     name: string;
     fsPath: string;
     fileType: 'html' | 'md';
+    mtime?: number;
 }
 
 interface FolderNode {
@@ -187,15 +191,26 @@ export class ArtifactsWebviewProvider implements vscode.WebviewViewProvider {
     private workspaceFolder: string | undefined;
     private folders: FolderConfig[];
     private extensionUri: vscode.Uri;
+    private workspaceState: vscode.Memento;
+    private sortMode: SortMode;
     private _onOpenFile = new vscode.EventEmitter<string>();
     readonly onOpenFile = this._onOpenFile.event;
     private _onContextAction = new vscode.EventEmitter<{ action: string; fsPath: string }>();
     readonly onContextAction = this._onContextAction.event;
 
-    constructor(workspaceFolder: string | undefined, folders: FolderConfig[], extensionUri: vscode.Uri) {
+    constructor(workspaceFolder: string | undefined, folders: FolderConfig[], extensionUri: vscode.Uri, workspaceState: vscode.Memento) {
         this.workspaceFolder = workspaceFolder;
         this.folders = folders;
         this.extensionUri = extensionUri;
+        this.workspaceState = workspaceState;
+        const stored = workspaceState.get<SortMode>(SORT_MODE_KEY, 'name-asc');
+        this.sortMode = (stored === 'mtime-desc') ? 'mtime-desc' : 'name-asc';
+    }
+
+    private async setSortMode(mode: SortMode): Promise<void> {
+        this.sortMode = (mode === 'mtime-desc') ? 'mtime-desc' : 'name-asc';
+        await this.workspaceState.update(SORT_MODE_KEY, this.sortMode);
+        await this.updateTree('');
     }
 
     refresh(): void {
@@ -226,7 +241,7 @@ export class ArtifactsWebviewProvider implements vscode.WebviewViewProvider {
         const codiconUri = webviewView.webview.asWebviewUri(
             vscode.Uri.joinPath(this.extensionUri, 'assets', 'codicon.css')
         );
-        webviewView.webview.html = this.getHtml(codiconUri);
+        webviewView.webview.html = this.getHtml(codiconUri, this.sortMode);
 
         webviewView.webview.onDidReceiveMessage(msg => {
             if (msg.command === 'search') {
@@ -239,6 +254,8 @@ export class ArtifactsWebviewProvider implements vscode.WebviewViewProvider {
                 } else {
                     this._onContextAction.fire({ action: msg.action, fsPath: msg.fsPath });
                 }
+            } else if (msg.command === 'setSort') {
+                this.setSortMode(msg.mode);
             } else if (msg.command === 'ready') {
                 this.updateTree('');
             }
@@ -286,6 +303,7 @@ export class ArtifactsWebviewProvider implements vscode.WebviewViewProvider {
             }
         }
 
+        const fileNodes: FileNode[] = [];
         for (const f of files) {
             const isHtml = f.name.endsWith('.html') && f.name !== 'index.html';
             const isMd = f.name.endsWith('.md');
@@ -295,11 +313,27 @@ export class ArtifactsWebviewProvider implements vscode.WebviewViewProvider {
             if (query && !displayName.toLowerCase().includes(query) && !f.name.toLowerCase().includes(query)) {
                 continue;
             }
-            node.children.push({
+            fileNodes.push({
                 name: displayName,
                 fsPath: path.join(dirPath, f.name),
                 fileType: isHtml ? 'html' : 'md'
             });
+        }
+
+        if (this.sortMode === 'mtime-desc' && fileNodes.length > 0) {
+            await Promise.all(fileNodes.map(async fn => {
+                try {
+                    const st = await fs.promises.stat(fn.fsPath);
+                    fn.mtime = st.mtimeMs;
+                } catch {
+                    fn.mtime = 0;
+                }
+            }));
+            fileNodes.sort((a, b) => (b.mtime ?? 0) - (a.mtime ?? 0));
+        }
+
+        for (const fn of fileNodes) {
+            node.children.push(fn);
         }
 
         // If searching and folder name matches, include all its contents
@@ -310,7 +344,8 @@ export class ArtifactsWebviewProvider implements vscode.WebviewViewProvider {
         return node;
     }
 
-    private getHtml(codiconUri: vscode.Uri): string {
+    private getHtml(codiconUri: vscode.Uri, sortMode: SortMode): string {
+        const initialSortMode = sortMode === 'mtime-desc' ? 'mtime-desc' : 'name-asc';
         return `<!DOCTYPE html>
 <html>
 <head>
@@ -457,6 +492,7 @@ export class ArtifactsWebviewProvider implements vscode.WebviewViewProvider {
     <div class="search-bar">
         <input id="search" type="text" />
         <button id="clearBtn" class="clear-btn" title="Clear" style="display:none;"><span class="codicon codicon-close"></span></button>
+        <button id="sortBtn" title="Sort: A→Z"><span id="sortIcon" class="codicon codicon-sort-precedence"></span></button>
         <button id="searchBtn" title="Search"><span class="codicon codicon-search"></span></button>
     </div>
     <div id="tree"></div>
@@ -465,7 +501,26 @@ export class ArtifactsWebviewProvider implements vscode.WebviewViewProvider {
         const vscode = acquireVsCodeApi();
         const searchInput = document.getElementById('search');
         const clearBtn = document.getElementById('clearBtn');
+        const sortBtn = document.getElementById('sortBtn');
+        const sortIcon = document.getElementById('sortIcon');
         const treeEl = document.getElementById('tree');
+        let sortMode = '${initialSortMode}';
+
+        function applySortUi() {
+            if (sortMode === 'mtime-desc') {
+                sortIcon.className = 'codicon codicon-clock';
+                sortBtn.title = 'Sort: last modified (click for A→Z)';
+            } else {
+                sortIcon.className = 'codicon codicon-sort-precedence';
+                sortBtn.title = 'Sort: A→Z (click for last modified)';
+            }
+        }
+        applySortUi();
+        sortBtn.addEventListener('click', () => {
+            sortMode = sortMode === 'mtime-desc' ? 'name-asc' : 'mtime-desc';
+            applySortUi();
+            vscode.postMessage({ command: 'setSort', mode: sortMode });
+        });
 
         function doSearch() {
             vscode.postMessage({ command: 'search', query: searchInput.value });

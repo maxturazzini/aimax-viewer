@@ -2,6 +2,18 @@
 
 All notable changes to the AIMax Viewer extension will be documented in this file.
 
+## [0.1.27] - 2026-04-27
+
+### Added
+- **Sort Toggle in Artifacts View**: New button in the search bar that toggles between alphabetical (A→Z, default) and last-modified (newest first) ordering. The selected mode is persisted per-workspace and survives reloads. Folders remain alphabetical in both modes; only files reorder.
+
+### Technical
+- `ArtifactsWebviewProvider` now receives `vscode.Memento` (`workspaceState`) and reads/writes the key `aimaxViewer.sortMode`.
+- `mtime-desc` mode performs `fs.promises.stat()` per file in parallel via `Promise.all` (zero stat calls in default `name-asc` mode — no regression).
+- Stat failures fall back to `mtime: 0` per-file without aborting the scan.
+
+---
+
 ## [0.1.26] - 2026-04-26
 
 ### Added
