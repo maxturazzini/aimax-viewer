@@ -2,6 +2,21 @@
 
 All notable changes to the AIMax Viewer extension will be documented in this file.
 
+## [0.1.28] - 2026-04-28
+
+### Added
+- **URL Fallback for Browser Title**: When the loaded page has no `<title>` (or is cross-origin), the Browser Panel tab title now falls back to the current URL — the same one shown in the (i) tooltip — instead of remaining empty.
+- **Clipboard Copy in Browser Panel**: Selecting text inside the iframe and pressing `Cmd/Ctrl+C` now copies to the system clipboard. A `keydown` + `copy` listener is injected into the iframe document on load; a parent-level fallback handles cases where VS Code intercepts the shortcut before it reaches the frame. Selection is forwarded to the host via `postMessage` and written via `vscode.env.clipboard.writeText`.
+
+### Fixed
+- **Home/Browser Rendering Mismatch**: Home Panel now applies the same Content-Security-Policy as the Browser Panel via injected `<meta http-equiv="Content-Security-Policy">`. Previously, missing CSP in the Home wrapper caused Google Fonts (e.g. Inter) to fail loading, falling back to Helvetica with different metrics — making the same artifact look noticeably different between the two views. Both panels now render identically.
+- **Broken AI, MAX Brand Icon**: Toolbar icon was rendering as a broken image whenever the wrapped HTML was loaded outside its originating webview (e.g. via the new annotation proxy). Replaced `webview.asWebviewUri()` references with an inlined base64 `data:image/png` URI, cached on first read. Works uniformly across webview, iframe, and proxy contexts.
+
+### Changed
+- **Presenter Defaults**: Slide presenter now starts with the **Dots** filter inactive (decks ship without dots overlay by default) and **Swap Layout** active (speaker notes above, next-slide preview below). Button-active visuals were inverted accordingly so the lit state always reflects "user opted in to non-default behavior".
+
+---
+
 ## [0.1.27] - 2026-04-27
 
 ### Added

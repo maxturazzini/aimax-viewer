@@ -21,6 +21,19 @@ let webviewProvider: ArtifactsWebviewProvider | undefined;
 let appsManager: AppsManager | undefined;
 let appsTreeProvider: AppsTreeProvider | undefined;
 let recentsProvider: RecentsWebviewProvider | undefined;
+let cachedFaviconDataUri: string | undefined;
+
+function getFaviconDataUri(): string {
+    if (cachedFaviconDataUri) return cachedFaviconDataUri;
+    try {
+        const iconPath = path.join(extensionContext.extensionPath, 'icon.png');
+        const data = fs.readFileSync(iconPath);
+        cachedFaviconDataUri = `data:image/png;base64,${data.toString('base64')}`;
+    } catch {
+        cachedFaviconDataUri = '';
+    }
+    return cachedFaviconDataUri;
+}
 
 
 // Settings
@@ -543,7 +556,22 @@ export function activate(context: vscode.ExtensionContext) {
     );
 }
 
+function rewriteToProxy(url: string): string {
+    // Route external localhost URLs through the AIMaxViewer proxy so the
+    // annotation client can be injected. Skip our own server port (already injected).
+    try {
+        const u = new URL(url);
+        if (u.hostname !== 'localhost' && u.hostname !== '127.0.0.1') return url;
+        const port = parseInt(u.port || (u.protocol === 'https:' ? '443' : '80'), 10);
+        if (!port || port === serverPort) return url;
+        return `http://127.0.0.1:${serverPort}/__proxy__/${port}${u.pathname}${u.search}${u.hash}`;
+    } catch {
+        return url;
+    }
+}
+
 function openInBrowser(url: string, customTitle?: string) {
+    url = rewriteToProxy(url);
     // Track in recents if it's a local file
     if (recentsProvider) {
         try {
@@ -608,9 +636,8 @@ function openInBrowser(url: string, customTitle?: string) {
             openBrowserPanels.delete(url);
         });
 
-        // Get favicon URI
-        const faviconPath = vscode.Uri.joinPath(extensionContext.extensionUri, 'icon.png');
-        const faviconUri = newPanel.webview.asWebviewUri(faviconPath).toString();
+        // Get favicon as inline base64 data URI (works in webview, iframe, and proxy contexts)
+        const faviconUri = getFaviconDataUri();
 
         // Handle messages from webview
         newPanel.webview.onDidReceiveMessage(message => {
@@ -679,9 +706,7 @@ function openInBrowser(url: string, customTitle?: string) {
         });
     }
 
-    // Get favicon URI
-    const faviconPath = vscode.Uri.joinPath(extensionContext.extensionUri, 'icon.png');
-    const faviconUri = browserPanel.webview.asWebviewUri(faviconPath).toString();
+    const faviconUri = getFaviconDataUri();
 
     browserPanel.title = pageTitle;
     const showDropdown = config.browserLayout === 'top';
@@ -1326,17 +1351,16 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
                     console.log('[AIMax Nav] URL unchanged or about:blank, skipping history update');
                 }
 
-                // Try to get page title
+                // Try to get page title, fallback to current URL
                 const iframeTitle = frame.contentDocument?.title;
-                if (iframeTitle) {
-                    vscode.postMessage({ command: 'updateTitle', title: iframeTitle });
-                }
+                vscode.postMessage({ command: 'updateTitle', title: iframeTitle || currentUrl });
 
                 // Note: Metadata is received via postMessage from the iframe content
                 // (see message listener below)
             } catch (e) {
-                // Cross-origin - URL/title not accessible, but metadata still comes via postMessage
-                console.log('[AIMax Nav] Cross-origin iframe, waiting for postMessage');
+                // Cross-origin - title not accessible, fallback to URL
+                console.log('[AIMax Nav] Cross-origin iframe, using URL as title');
+                vscode.postMessage({ command: 'updateTitle', title: currentUrl });
             }
         };
 
@@ -1465,9 +1489,44 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
         });
 
         // Re-assert annotation mode on iframe load (new page = fresh client)
+        // Also inject Cmd/Ctrl+C handler so text selection inside iframe can be copied
+        // (VS Code webview intercepts keyboard shortcuts; we forward selection to host)
         frame.addEventListener('load', () => {
             if (annotActive) {
                 try { frame.contentWindow.postMessage({ type: 'annot:toggle', on: true }, '*'); } catch (e) {}
+            }
+            try {
+                const doc = frame.contentDocument;
+                if (doc) {
+                    doc.addEventListener('keydown', (e) => {
+                        if ((e.metaKey || e.ctrlKey) && (e.key === 'c' || e.key === 'C')) {
+                            const sel = doc.getSelection && doc.getSelection().toString();
+                            if (sel) {
+                                vscode.postMessage({ command: 'copyToClipboard', text: sel });
+                            }
+                        }
+                    });
+                    doc.addEventListener('copy', (e) => {
+                        const sel = doc.getSelection && doc.getSelection().toString();
+                        if (sel) {
+                            vscode.postMessage({ command: 'copyToClipboard', text: sel });
+                        }
+                    });
+                }
+            } catch (e) { /* cross-origin */ }
+        });
+
+        // Parent-level fallback: if user presses Cmd/Ctrl+C while iframe has selection,
+        // copy that selection to clipboard via host
+        document.addEventListener('keydown', (e) => {
+            if ((e.metaKey || e.ctrlKey) && (e.key === 'c' || e.key === 'C')) {
+                try {
+                    const doc = frame.contentDocument;
+                    const sel = doc && doc.getSelection && doc.getSelection().toString();
+                    if (sel) {
+                        vscode.postMessage({ command: 'copyToClipboard', text: sel });
+                    }
+                } catch (err) { /* cross-origin */ }
             }
         });
 
@@ -1550,6 +1609,91 @@ function startHttpServer(workspaceFolder: string) {
                 'Access-Control-Allow-Origin': '*',
                 'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
                 'Access-Control-Allow-Headers': 'Content-Type'
+            });
+            res.end();
+            return;
+        }
+
+        // Reverse proxy: /__proxy__/<port>/<path> → http://127.0.0.1:<port>/<path>
+        // Injects annotation client into HTML responses so the DOM-inspector toolbar
+        // can talk to pages served by external dev servers (Vite, python http.server, etc.).
+        const proxyMatch = url.match(/^\/__proxy__\/(\d+)(\/.*)?$/);
+        if (proxyMatch) {
+            const targetPort = parseInt(proxyMatch[1], 10);
+            const rest = proxyMatch[2] || '/';
+            // Strip Referer to avoid leaking the proxy URL upstream and confusing apps
+            const upstreamHeaders: { [k: string]: string | string[] | undefined } = { ...req.headers };
+            delete upstreamHeaders['host'];
+            delete upstreamHeaders['referer'];
+            delete upstreamHeaders['origin'];
+            delete upstreamHeaders['accept-encoding']; // request identity so we can inject
+
+            const proxyReq = http.request({
+                host: '127.0.0.1',
+                port: targetPort,
+                path: rest,
+                method: req.method,
+                headers: upstreamHeaders as http.OutgoingHttpHeaders
+            }, (proxyRes) => {
+                const ct = String(proxyRes.headers['content-type'] || '');
+                const isHtml = ct.toLowerCase().includes('text/html');
+                const outHeaders: { [k: string]: string | string[] | undefined } = { ...proxyRes.headers };
+                // Drop hop-by-hop and length (we may rewrite body)
+                delete outHeaders['content-length'];
+                delete outHeaders['transfer-encoding'];
+                delete outHeaders['content-encoding'];
+                outHeaders['access-control-allow-origin'] = '*';
+
+                // Rewrite Location on redirects to stay inside the proxy
+                if (proxyRes.headers.location) {
+                    const loc = String(proxyRes.headers.location);
+                    if (loc.startsWith('/')) {
+                        outHeaders['location'] = `/__proxy__/${targetPort}${loc}`;
+                    } else if (loc.startsWith(`http://localhost:${targetPort}`) || loc.startsWith(`http://127.0.0.1:${targetPort}`)) {
+                        const u = new URL(loc);
+                        outHeaders['location'] = `/__proxy__/${targetPort}${u.pathname}${u.search}`;
+                    }
+                }
+
+                if (!isHtml) {
+                    res.writeHead(proxyRes.statusCode || 200, outHeaders as http.OutgoingHttpHeaders);
+                    proxyRes.pipe(res);
+                    return;
+                }
+
+                // Buffer HTML to inject annotation client + base href for relative URLs
+                const chunks: Buffer[] = [];
+                proxyRes.on('data', (c: Buffer) => chunks.push(c));
+                proxyRes.on('end', () => {
+                    let html = Buffer.concat(chunks).toString('utf-8');
+                    const baseTag = `<base href="/__proxy__/${targetPort}/">`;
+                    if (/<head[^>]*>/i.test(html)) {
+                        html = html.replace(/<head([^>]*)>/i, `<head$1>${baseTag}`);
+                    } else {
+                        html = baseTag + html;
+                    }
+                    html = injectAnnotationClient(html);
+                    res.writeHead(proxyRes.statusCode || 200, outHeaders as http.OutgoingHttpHeaders);
+                    res.end(html);
+                });
+            });
+            proxyReq.on('error', (err) => {
+                res.writeHead(502, { 'Content-Type': 'text/plain', 'Access-Control-Allow-Origin': '*' });
+                res.end(`Proxy error: cannot reach 127.0.0.1:${targetPort} (${err.message})`);
+            });
+            req.pipe(proxyReq);
+            return;
+        }
+
+        // Root-relative fallback: if request comes from a proxied page (Referer header
+        // points to /__proxy__/PORT/...) and the path is not a workspace file, redirect
+        // through the proxy. Handles apps that fetch /api/foo or load /assets/x.js.
+        const referer = String(req.headers['referer'] || '');
+        const refMatch = referer.match(/\/__proxy__\/(\d+)\//);
+        if (refMatch && !url.startsWith('/__proxy__/') && !url.startsWith('/api/') && !url.startsWith('/__')) {
+            res.writeHead(302, {
+                'Location': `/__proxy__/${refMatch[1]}${url}`,
+                'Access-Control-Allow-Origin': '*'
             });
             res.end();
             return;
@@ -1977,9 +2121,7 @@ function openArtifactsHome(workspaceFolder: string, homePage: string = 'Artifact
         });
     }
 
-    // Get favicon URI
-    const faviconPath = vscode.Uri.joinPath(extensionContext.extensionUri, 'icon.png');
-    const faviconUri = homePanel.webview.asWebviewUri(faviconPath).toString();
+    const faviconUri = getFaviconDataUri();
 
     homePanel.webview.html = wrapWithToolbarAndLinkHandler(htmlContent, 'Artifacts Home', faviconUri, indexPath);
 }
@@ -2363,8 +2505,10 @@ function wrapWithToolbarAndLinkHandler(html: string, title: string, faviconUri: 
     </script>
     `;
 
-    // Inject styles in head
-    let result = html.replace('</head>', toolbarStyles + '</head>');
+    // Inject CSP + styles in head (CSP same as browser panel so Google Fonts etc. load consistently)
+    const csp = generateCSP();
+    const cspMeta = `<meta http-equiv="Content-Security-Policy" content="${csp}">`;
+    let result = html.replace('</head>', cspMeta + toolbarStyles + '</head>');
 
     // Wrap body content with toolbar and wrapper
     result = result.replace(/<body([^>]*)>/, `<body$1>${toolbar}<div class="aimax-content-wrapper">`);
@@ -2402,9 +2546,7 @@ function openSetupInstructions() {
         }
     );
 
-    // Get favicon URI
-    const faviconPath = vscode.Uri.joinPath(extensionContext.extensionUri, 'icon.png');
-    const faviconUri = panel.webview.asWebviewUri(faviconPath).toString();
+    const faviconUri = getFaviconDataUri();
 
     // Wrap with minimal toolbar (no navigation since it's standalone)
     panel.webview.html = wrapSetupPageWithToolbar(htmlContent, 'AIMax Viewer Setup', faviconUri);
@@ -2452,8 +2594,10 @@ function wrapSetupPageWithToolbar(html: string, title: string, faviconUri: strin
     </div>
     `;
 
-    // Inject styles in head
-    let result = html.replace('</head>', toolbarStyles + '</head>');
+    // Inject CSP + styles in head (CSP same as browser panel so Google Fonts etc. load consistently)
+    const csp = generateCSP();
+    const cspMeta = `<meta http-equiv="Content-Security-Policy" content="${csp}">`;
+    let result = html.replace('</head>', cspMeta + toolbarStyles + '</head>');
 
     // Wrap body content with toolbar and wrapper
     result = result.replace(/<body([^>]*)>/, `<body$1>${toolbar}<div class="aimax-content-wrapper">`);

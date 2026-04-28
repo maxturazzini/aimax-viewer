@@ -580,6 +580,9 @@ function startPresenter() {
     document.getElementById('startup').classList.add('hidden');
     document.getElementById('presenter').classList.remove('hidden');
 
+    // Apply default toggle states (dots hidden, layout swapped)
+    applyDefaultToggles();
+
     // Open audience window
     audienceWin = window.open(url, 'audience', 'width=1280,height=720');
     audienceReady = false;
@@ -891,15 +894,15 @@ function initColResize() {
 }
 
 // === TOGGLE OPTIONS ===
-let dotsHidden = false;
+let dotsHidden = true;
 let carouselHidden = false;
 let notesLight = false;
 let notesFontSize = 20;
-let layoutSwapped = false;
+let layoutSwapped = true;
 
 function toggleDots() {
     dotsHidden = !dotsHidden;
-    document.getElementById('toggleDotsBtn').classList.toggle('active', dotsHidden);
+    document.getElementById('toggleDotsBtn').classList.toggle('active', !dotsHidden);
     const hideCSS = `
         .slide-dots, .nav-dots, .dot-nav, .progress-dots,
         [class*="dot-indicator"], [class*="slide-nav"] .dot,
@@ -968,6 +971,21 @@ function toggleSwapLayout() {
         panel.insertBefore(handle, notes);
     }
     fitAllIframes();
+}
+
+function applyDefaultToggles() {
+    // Dots hidden by default: button inactive (no 'active' class) but hide CSS gets reapplied on iframe load
+    document.getElementById('toggleDotsBtn').classList.toggle('active', !dotsHidden);
+    // Layout swapped by default: reorder notes/next, mark button active
+    if (layoutSwapped) {
+        const panel = document.querySelector('.notes-panel');
+        const notes = document.querySelector('.notes-content');
+        const next = document.getElementById('nextSlidePanel');
+        const handle = document.getElementById('resizeHandle');
+        panel.insertBefore(notes, panel.firstChild);
+        panel.insertBefore(handle, next);
+        document.getElementById('toggleSwapBtn').classList.add('active');
+    }
 }
 
 function changeNotesFontSize(delta) {
