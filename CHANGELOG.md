@@ -2,6 +2,17 @@
 
 All notable changes to the AIMax Viewer extension will be documented in this file.
 
+## [0.1.30] - 2026-05-10
+
+Patch release. No functional changes.
+
+### Fixed
+
+- **`.playwright-mcp/` debug artifacts leaked into the v0.1.29 VSIX**: 16 files (~365 KB of Playwright console logs, accessibility-tree YAML snapshots, and verification screenshots) ended up bundled into the published extension because the folder was gitignored but not listed in `.vscodeignore`. Added `.playwright-mcp/**` plus standard junk patterns (`*.log`, `.DS_Store`, `.env`, `.env.*`) to `.vscodeignore`. v0.1.30 ships clean.
+- **`aimax-make-presentable` skill missing from the Claude Code marketplace**: only `aimax-bridge` was registered in `.claude-plugin/marketplace.json`, so `/plugin install aimax-make-presentable@aimax-viewer` would have failed. Now both skills are properly registered.
+
+---
+
 ## [0.1.29] - 2026-05-10
 
 A big release that consolidates several months of work and reshapes

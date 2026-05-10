@@ -6,6 +6,11 @@
       "name": "aimax-bridge",
       "source": "./plugins/aimax-bridge",
       "description": "Adds Claude Bridge API integration to HTML artifacts served by AIMax Viewer"
+    },
+    {
+      "name": "aimax-make-presentable",
+      "source": "./plugins/aimax-make-presentable",
+      "description": "Transforms a Markdown or HTML file into an AIMax-presentable slide deck"
     }
   ]
 }

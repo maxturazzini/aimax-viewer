@@ -21,3 +21,8 @@ deploy.sh
 .vsixignore
 scripts/**
 .browser-session/**
+.playwright-mcp/**
+*.log
+.DS_Store
+.env
+.env.*
