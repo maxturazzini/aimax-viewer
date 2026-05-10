@@ -2,7 +2,7 @@
   "name": "aimax-viewer",
   "displayName": "AIMax Viewer",
   "description": "Auto-open Artifacts at startup + internal browser for localhost",
-  "version": "0.1.30",
+  "version": "0.1.32",
   "publisher": "maxturazzini",
   "icon": "icon.png",
   "repository": {
@@ -91,6 +91,26 @@
         "icon": "$(add)"
       },
       {
+        "command": "aimaxViewer.openAppInViewer",
+        "title": "Open in AIMax Viewer",
+        "icon": "$(window)"
+      },
+      {
+        "command": "aimaxViewer.openAppInBrowser",
+        "title": "Open in External Browser",
+        "icon": "$(link-external)"
+      },
+      {
+        "command": "aimaxViewer.copyAppUrl",
+        "title": "Copy URL",
+        "icon": "$(copy)"
+      },
+      {
+        "command": "aimaxViewer.editAppInSettings",
+        "title": "Edit in settings.json",
+        "icon": "$(edit)"
+      },
+      {
         "command": "aimaxViewer.clearRecents",
         "title": "Clear Recents",
         "icon": "$(clear-all)"
@@ -176,7 +196,7 @@
       "view/item/context": [
         {
           "command": "aimaxViewer.startApp",
-          "when": "view == aimaxViewer.appsTree && viewItem == app-stopped",
+          "when": "view == aimaxViewer.appsTree && viewItem =~ /^app-stopped(-remote)?$/",
           "group": "inline"
         },
         {
@@ -188,6 +208,36 @@
           "command": "aimaxViewer.addAppToConfig",
           "when": "view == aimaxViewer.appsTree && viewItem == app-discovered",
           "group": "inline"
+        },
+        {
+          "command": "aimaxViewer.openAppInViewer",
+          "when": "view == aimaxViewer.appsTree && viewItem =~ /^app-(running|stopped)(-remote)?$/",
+          "group": "1_open@1"
+        },
+        {
+          "command": "aimaxViewer.openAppInBrowser",
+          "when": "view == aimaxViewer.appsTree && viewItem =~ /^app-(running|stopped)(-remote)?$/",
+          "group": "1_open@2"
+        },
+        {
+          "command": "aimaxViewer.startApp",
+          "when": "view == aimaxViewer.appsTree && viewItem =~ /^app-stopped(-remote)?$/",
+          "group": "2_lifecycle@1"
+        },
+        {
+          "command": "aimaxViewer.stopApp",
+          "when": "view == aimaxViewer.appsTree && viewItem == app-running",
+          "group": "2_lifecycle@1"
+        },
+        {
+          "command": "aimaxViewer.copyAppUrl",
+          "when": "view == aimaxViewer.appsTree && viewItem =~ /^app-(running|stopped)(-remote)?$/",
+          "group": "3_meta@1"
+        },
+        {
+          "command": "aimaxViewer.editAppInSettings",
+          "when": "view == aimaxViewer.appsTree && viewItem =~ /^app-(running|stopped)(-remote)?$/",
+          "group": "3_meta@2"
         }
       ]
     },
@@ -299,17 +349,17 @@
         "aimaxViewer.liveInspect.enabled": {
           "type": "boolean",
           "default": true,
-          "description": "Live Inspect: route external localhost URLs through AIMax proxy to enable Annotation Mode and Claude Bridge injection on dev servers (Vite, Streamlit, FastAPI...). Disable to load apps directly (no annotation, no bridge injection)."
+          "description": "Enable Live Annotation: lets you annotate any localhost dev app (Vite, Streamlit, FastAPI...) by routing cross-port URLs through the AIMax proxy, which injects the annotation client. Disable to load apps directly — annotation will then work only on pages served by AIMax itself."
         },
         "aimaxViewer.liveInspect.injectBridge": {
           "type": "boolean",
-          "default": true,
-          "description": "When Live Inspect is enabled, inject the Claude Bridge floating panel into proxied HTML pages. Only effective if liveInspect.enabled is true."
+          "default": false,
+          "description": "Add a floating Claude button inside annotated pages, on top of your app. Useful for sending annotations to Claude without leaving the page, but the overlay can clash with some apps' CSS/JS. Requires Live Annotation."
         },
         "aimaxViewer.bridge.toolbarButton": {
           "type": "boolean",
           "default": true,
-          "description": "Show Claude Bridge button in the Browser panel toolbar. The button opens a dropdown panel inside the webview chrome (independent of the proxy)."
+          "description": "Show the Claude Bridge button in the Browser panel toolbar. The button opens a dropdown inside the webview chrome — it never touches the page DOM and is always safe. Hidden from the in-app menu; configure here only if you want to declutter the toolbar."
         },
         "aimaxViewer.appsManager.enabled": {
           "type": "boolean",
@@ -319,7 +369,17 @@
         "aimaxViewer.appsManager.refreshInterval": {
           "type": "number",
           "default": 30000,
-          "description": "Auto-refresh interval in milliseconds (0 to disable). Min recommended: 10000"
+          "description": "Slow refresh interval in milliseconds (0 to disable). Used for HTTP status checks after the burst window and for lsof-based discovery. Min recommended: 10000"
+        },
+        "aimaxViewer.appsManager.burstDurationMs": {
+          "type": "number",
+          "default": 30000,
+          "description": "Initial fast-refresh window in milliseconds after activation or a manual refresh (0 to disable). Only HTTP status checks run during this window — lsof is never bursted."
+        },
+        "aimaxViewer.appsManager.burstIntervalMs": {
+          "type": "number",
+          "default": 3000,
+          "description": "HTTP status-check interval in milliseconds during the burst window."
         },
         "aimaxViewer.appsManager.apps": {
           "type": "array",
@@ -358,6 +418,10 @@
               "category": {
                 "type": "string",
                 "description": "Category for grouping in the tree view"
+              },
+              "remote": {
+                "type": "boolean",
+                "description": "Mark this app as running on a different host. When true, AIMax will not run lsof or kill local processes for it. If omitted, it is auto-derived from the host of healthUrl."
               }
             },
             "required": [

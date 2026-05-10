@@ -1,0 +1,9 @@
+{
+  "name": "aimax-make-presentable",
+  "description": "Transform a Markdown or HTML file into an AIMax-presentable slide deck with multiple <section> elements ready for the AIMax Viewer presenter",
+  "version": "1.0.0",
+  "author": {
+    "name": "Max Turazzini",
+    "url": "https://maxturazzini.com"
+  }
+}

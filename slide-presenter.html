@@ -32,7 +32,7 @@ body {
 .presenter {
     display: grid;
     grid-template-columns: 1fr 8px 1fr;
-    grid-template-rows: 1fr auto auto;
+    grid-template-rows: 1fr auto auto auto;
     height: 100vh;
     gap: 12px 0;
     padding: 12px;
@@ -238,10 +238,35 @@ body {
     box-shadow: inset 0 0 0 2px var(--yellow);
 }
 
+/* === CAROUSEL RESIZE HANDLE === */
+.carousel-resize-handle {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    height: 8px;
+    cursor: row-resize;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.carousel-resize-handle::after {
+    content: '';
+    width: 40px;
+    height: 3px;
+    background: rgba(255,255,255,0.2);
+    border-radius: 2px;
+    transition: background 0.2s;
+}
+
+.carousel-resize-handle:hover::after,
+.carousel-resize-handle.dragging::after {
+    background: var(--sky);
+}
+
 /* === CAROUSEL === */
 .carousel {
     grid-column: 1 / -1;
-    grid-row: 2;
+    grid-row: 3;
     background: var(--gray);
     border-radius: 8px;
     padding: 6px 10px;
@@ -304,7 +329,7 @@ body {
 /* === BOTTOM BAR === */
 .bottom-bar {
     grid-column: 1 / -1;
-    grid-row: 3;
+    grid-row: 4;
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -545,6 +570,8 @@ body {
         </div>
     </div>
 
+    <div class="carousel-resize-handle" id="carouselResizeHandle" title="Drag to resize carousel"></div>
+
     <div class="carousel" id="carousel"></div>
 
     <div class="bottom-bar">
@@ -643,6 +670,7 @@ function startPresenter() {
 
     initResize();
     initColResize();
+    initCarouselResize();
 
     // Observe panels for fit scaling
     resizeObserver.observe(document.querySelector('#currentSlidePanel .iframe-wrap'));
@@ -651,12 +679,17 @@ function startPresenter() {
 }
 
 // === CAROUSEL ===
+let carouselItemWidth = 106;
+let carouselItemHeight = 60;
+
 function buildCarousel() {
     const carousel = document.getElementById('carousel');
     carousel.textContent = '';
     slides.forEach((s, i) => {
         const item = document.createElement('div');
         item.className = 'carousel-item';
+        item.style.width = carouselItemWidth + 'px';
+        item.style.height = carouselItemHeight + 'px';
         item.onclick = () => goToSlide(i);
 
         const iframe = document.createElement('iframe');
@@ -668,8 +701,7 @@ function buildCarousel() {
                 iframeDoc.documentElement.style.overflow = 'hidden';
             } catch(e) {}
         };
-        // Scale is set in CSS (1280x720 → 106x60 via transform-origin: 0 0)
-        iframe.style.transform = 'scale(' + (106 / 1280) + ')';
+        iframe.style.transform = 'scale(' + (carouselItemWidth / 1280) + ')';
 
         const num = document.createElement('div');
         num.className = 'carousel-num';
@@ -678,6 +710,15 @@ function buildCarousel() {
         item.appendChild(iframe);
         item.appendChild(num);
         carousel.appendChild(item);
+    });
+}
+
+function applyCarouselItemSize() {
+    document.querySelectorAll('.carousel-item').forEach(item => {
+        item.style.width = carouselItemWidth + 'px';
+        item.style.height = carouselItemHeight + 'px';
+        const iframe = item.querySelector('iframe');
+        if (iframe) iframe.style.transform = 'scale(' + (carouselItemWidth / 1280) + ')';
     });
 }
 
@@ -860,6 +901,44 @@ function toggleTimer() {
     }
 }
 
+// === CAROUSEL RESIZE ===
+function initCarouselResize() {
+    const handle = document.getElementById('carouselResizeHandle');
+    const carousel = document.getElementById('carousel');
+    let startY = 0;
+    let startHeight = 0;
+
+    handle.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        startY = e.clientY;
+        startHeight = carousel.offsetHeight;
+        handle.classList.add('dragging');
+        document.addEventListener('mousemove', onDrag);
+        document.addEventListener('mouseup', onRelease);
+    });
+
+    function onDrag(e) {
+        const delta = startY - e.clientY; // upward drag grows the carousel
+        const minH = 72;
+        const maxH = Math.max(minH, window.innerHeight * 0.6);
+        const newHeight = Math.max(minH, Math.min(maxH, startHeight + delta));
+        carousel.style.height = newHeight + 'px';
+        // Item height fills the carousel minus padding (6+6) and scrollbar (~3)
+        const itemH = Math.max(40, newHeight - 15);
+        const itemW = Math.round(itemH * (1280 / 720));
+        carouselItemHeight = itemH;
+        carouselItemWidth = itemW;
+        applyCarouselItemSize();
+        fitAllIframes();
+    }
+
+    function onRelease() {
+        handle.classList.remove('dragging');
+        document.removeEventListener('mousemove', onDrag);
+        document.removeEventListener('mouseup', onRelease);
+    }
+}
+
 // === COLUMN RESIZE ===
 function initColResize() {
     const handle = document.getElementById('colResizeHandle');
@@ -945,8 +1024,9 @@ function reapplyDotsHiding() {
 
 function toggleCarousel() {
     carouselHidden = !carouselHidden;
-    document.getElementById('toggleCarouselBtn').classList.toggle('active', carouselHidden);
+    document.getElementById('toggleCarouselBtn').classList.toggle('active', !carouselHidden);
     document.getElementById('carousel').classList.toggle('hidden', carouselHidden);
+    document.getElementById('carouselResizeHandle').classList.toggle('hidden', carouselHidden);
     fitAllIframes();
 }
 
@@ -976,6 +1056,8 @@ function toggleSwapLayout() {
 function applyDefaultToggles() {
     // Dots hidden by default: button inactive (no 'active' class) but hide CSS gets reapplied on iframe load
     document.getElementById('toggleDotsBtn').classList.toggle('active', !dotsHidden);
+    // Carousel visible by default: button active
+    document.getElementById('toggleCarouselBtn').classList.toggle('active', !carouselHidden);
     // Layout swapped by default: reorder notes/next, mark button active
     if (layoutSwapped) {
         const panel = document.querySelector('.notes-panel');

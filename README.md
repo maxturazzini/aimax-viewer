@@ -93,10 +93,22 @@ Present HTML slide decks directly from VS Code. The presenter opens in your syst
 
 **How to use:**
 1. Right-click an HTML file in Explorer -> "Present with AIMax Viewer"
-2. Or from the AIMax browser hamburger menu -> "Present in Browser"
+2. Or from the AIMax browser hamburger menu -> "Present in Browser" (enabled when the file looks like a deck; disabled otherwise with a tooltip explaining why)
 3. Or right-click in Artifacts/Recents sidebar -> "Present"
 
-**Slide format:** Your HTML file should use `<section>` elements for slides. Add `.speaker-notes` elements inside sections for speaker notes.
+**Slide format (deck contract):**
+
+| Element | Required | Role |
+|---|---|---|
+| `<section>` | **Yes, ≥2** | One per slide. The Browser detects a deck by counting these. |
+| `<h1>` or `<h2>` inside `<section>` | Recommended | Slide title (shown in counter / next-slide preview). Falls back to "Slide N". |
+| `<div class="speaker-notes">…</div>` | Optional | Speaker notes panel (hide them on the audience view with `.speaker-notes { display: none; }`). |
+| `<section class="title-slide">` | Optional | Convention for the opening slide. |
+| `<section class="end-slide">` | Optional | Convention for the closing slide. |
+
+A reference example ships at `Artifacts/aimax-viewer-presentation.html`.
+
+**"Make it presentable" — turn any file into a deck:** when the current file isn't a deck, a new menu item appears under "Present in Browser". It opens Claude Code with the **`aimax-make-presentable`** skill, which walks you through transforming a `.md` or `.html` file into a deck (asks split-on-heading level for markdown, audience/length/notes preferences, then writes `<filename>-deck.html` next to the input). The skill is at `skills/aimax-make-presentable/` and `plugins/aimax-make-presentable/`. If you haven't installed it locally, the menu still works: it tells Claude to fetch the skill from GitHub and run it inline that one time.
 
 **Presenter options** (buttons below current slide):
 - Toggle dot navigation visibility

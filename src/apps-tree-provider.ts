@@ -5,9 +5,12 @@ export class AppTreeItem extends vscode.TreeItem {
     constructor(public readonly status: AppStatus) {
         super(status.name, vscode.TreeItemCollapsibleState.None);
 
-        // Icon and color based on status
+        // Icon: cloud for remote, circle for local; filled when running, outline when stopped
+        const iconName = status.remote
+            ? (status.running ? 'cloud' : 'cloud-outline')
+            : (status.running ? 'circle-filled' : 'circle-outline');
         this.iconPath = new vscode.ThemeIcon(
-            status.running ? 'circle-filled' : 'circle-outline',
+            iconName,
             status.running
                 ? new vscode.ThemeColor('charts.green')
                 : new vscode.ThemeColor('charts.red')
@@ -16,28 +19,42 @@ export class AppTreeItem extends vscode.TreeItem {
         // Description with port
         this.description = `:${status.port} ${status.running ? '● Running' : '○ Stopped'}`;
 
-        // Context value for conditional menus
-        this.contextValue = status.running ? 'app-running' : 'app-stopped';
+        // Context value drives right-click menu visibility (see package.json view/item/context)
+        // Differentiated for remote so Stop is hidden / handled differently
+        this.contextValue = status.remote
+            ? (status.running ? 'app-running-remote' : 'app-stopped-remote')
+            : (status.running ? 'app-running' : 'app-stopped');
 
         // Detailed tooltip
         const uptimeStr = status.uptime ? this.formatUptime(status.uptime) : 'N/A';
-        this.tooltip = new vscode.MarkdownString(
-            `**${status.name}**\n\n` +
-            `- Port: ${status.port}\n` +
-            `- Status: ${status.running ? '🟢 Running' : '🔴 Stopped'}\n` +
-            `- PID: ${status.pid || 'N/A'}\n` +
-            `- Uptime: ${uptimeStr}\n` +
-            `- Health: ${status.healthUrl}\n` +
+        const host = AppTreeItem.extractHost(status.healthUrl);
+        const lines = [
+            `**${status.name}**`,
+            ``,
+            `- Status: ${status.running ? 'Running' : 'Stopped'}`,
+            `- Host: ${host}${status.remote ? ' (remote)' : ''}`,
+            `- Port: ${status.port}`,
+            `- PID: ${status.pid ?? 'N/A'}`,
+            `- Uptime: ${uptimeStr}`,
+            `- Health: ${status.healthUrl}`,
             `- Category: ${status.category || 'Default'}`
-        );
+        ];
+        this.tooltip = new vscode.MarkdownString(lines.join('\n'));
 
-        // Click opens in browser if running
-        if (status.running) {
-            this.command = {
-                command: 'aimaxViewer.openBrowser',
-                title: 'Open in Browser',
-                arguments: [status.healthUrl, status.name]
-            };
+        // Click always opens in AIMax Viewer; if app is unreachable, the iframe
+        // will surface the connection error rather than failing silently.
+        this.command = {
+            command: 'aimaxViewer.openBrowser',
+            title: 'Open in AIMax Viewer',
+            arguments: [status.healthUrl, status.name]
+        };
+    }
+
+    private static extractHost(url: string): string {
+        try {
+            return new URL(url).hostname;
+        } catch {
+            return 'unknown';
         }
     }
 
@@ -135,40 +152,111 @@ export class AppsTreeProvider implements vscode.TreeDataProvider<AppsTreeItemTyp
     readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
 
     private appsManager: AppsManager;
-    private refreshTimer?: ReturnType<typeof setInterval>;
+    private statusTimer?: ReturnType<typeof setInterval>;
+    private discoveryTimer?: ReturnType<typeof setInterval>;
+    private burstTimeout?: ReturnType<typeof setTimeout>;
     private cachedStatuses: AppStatus[] = [];
     private cachedDiscovered: DiscoveredApp[] = [];
-    private _refreshing = false;
+    private _refreshingStatus = false;
+    private _refreshingDiscovery = false;
+    private slowIntervalMs: number;
+    private burstDurationMs: number;
+    private burstIntervalMs: number;
 
-    constructor(appsManager: AppsManager, refreshInterval: number) {
+    constructor(
+        appsManager: AppsManager,
+        refreshInterval: number,
+        burstDurationMs: number = 30000,
+        burstIntervalMs: number = 3000
+    ) {
         this.appsManager = appsManager;
-        if (refreshInterval > 0) {
-            this.startAutoRefresh(refreshInterval);
-        }
-        // Initial load
-        this.loadStatuses();
+        this.slowIntervalMs = refreshInterval;
+        this.burstDurationMs = burstDurationMs;
+        this.burstIntervalMs = burstIntervalMs;
+
+        // Initial load (status + discovery) and start burst
+        this.refreshStatus();
+        this.refreshDiscovery();
+        this.startBurst();
+        this.startSlowTimers();
     }
 
     private async loadStatuses(): Promise<void> {
         this.cachedStatuses = await this.appsManager.getStatus();
+    }
+
+    private async loadDiscovered(): Promise<void> {
         this.cachedDiscovered = await this.appsManager.discoverApps();
     }
 
-    refresh(): void {
-        // Guard: skip if a refresh is already in progress
-        if (this._refreshing) { return; }
-        this._refreshing = true;
+    /** Light-weight HTTP-only refresh of configured app statuses. */
+    refreshStatus(): void {
+        if (this._refreshingStatus) { return; }
+        this._refreshingStatus = true;
         this.loadStatuses().then(() => {
             this._onDidChangeTreeData.fire(undefined);
         }).finally(() => {
-            this._refreshing = false;
+            this._refreshingStatus = false;
         });
     }
 
+    /** Heavy lsof-based refresh of discovered (non-configured) running services. */
+    refreshDiscovery(): void {
+        if (this._refreshingDiscovery) { return; }
+        this._refreshingDiscovery = true;
+        this.loadDiscovered().then(() => {
+            this._onDidChangeTreeData.fire(undefined);
+        }).finally(() => {
+            this._refreshingDiscovery = false;
+        });
+    }
+
+    /** Manual full refresh (status + discovery) and restart the burst window. */
+    refresh(): void {
+        this.refreshStatus();
+        this.refreshDiscovery();
+        this.startBurst();
+    }
+
+    /** Restart the fast-refresh window (status only, never lsof). */
+    startBurst(): void {
+        if (this.burstDurationMs <= 0 || this.burstIntervalMs <= 0) return;
+        // If a burst is already running, stop it cleanly first
+        if (this.burstTimeout) {
+            clearTimeout(this.burstTimeout);
+            this.burstTimeout = undefined;
+        }
+        // Switch the status timer to burst cadence
+        if (this.statusTimer) {
+            clearInterval(this.statusTimer);
+        }
+        this.statusTimer = setInterval(() => this.refreshStatus(), this.burstIntervalMs);
+
+        // After burst window, fall back to slow cadence
+        this.burstTimeout = setTimeout(() => {
+            if (this.statusTimer) {
+                clearInterval(this.statusTimer);
+            }
+            if (this.slowIntervalMs > 0) {
+                this.statusTimer = setInterval(() => this.refreshStatus(), this.slowIntervalMs);
+            } else {
+                this.statusTimer = undefined;
+            }
+            this.burstTimeout = undefined;
+        }, this.burstDurationMs);
+    }
+
+    private startSlowTimers(): void {
+        // Discovery uses slow cadence only — never burst (lsof is expensive)
+        if (this.slowIntervalMs > 0) {
+            this.discoveryTimer = setInterval(() => this.refreshDiscovery(), this.slowIntervalMs);
+        }
+    }
+
     async getChildren(element?: AppsTreeItemType): Promise<AppsTreeItemType[]> {
-        // Ensure we have statuses
+        // Ensure caches are warm on first call
         if (this.cachedStatuses.length === 0 && this.cachedDiscovered.length === 0) {
-            await this.loadStatuses();
+            await Promise.all([this.loadStatuses(), this.loadDiscovered()]);
         }
 
         if (!element) {
@@ -222,13 +310,9 @@ export class AppsTreeProvider implements vscode.TreeDataProvider<AppsTreeItemTyp
         return element;
     }
 
-    private startAutoRefresh(interval: number): void {
-        this.refreshTimer = setInterval(() => this.refresh(), interval);
-    }
-
     dispose(): void {
-        if (this.refreshTimer) {
-            clearInterval(this.refreshTimer);
-        }
+        if (this.statusTimer) clearInterval(this.statusTimer);
+        if (this.discoveryTimer) clearInterval(this.discoveryTimer);
+        if (this.burstTimeout) clearTimeout(this.burstTimeout);
     }
 }

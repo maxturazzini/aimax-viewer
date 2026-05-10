@@ -20,6 +20,13 @@ let extensionContext: vscode.ExtensionContext;
 let treeProvider: ArtifactsTreeProvider | undefined;
 let webviewProvider: ArtifactsWebviewProvider | undefined;
 let appsManager: AppsManager | undefined;
+// Snapshot of toolbar toggles taken at activation. Kept in module scope so the
+// behaviour is locked for the session: any change to these settings only takes
+// effect after a window reload. This keeps the three toggles consistent —
+// users learn one rule (flip → reload → applies) instead of three different
+// timings.
+let liveInspectEnabledSnapshot = true;
+let liveInspectInjectBridgeSnapshot = true;
 let appsTreeProvider: AppsTreeProvider | undefined;
 let recentsProvider: RecentsWebviewProvider | undefined;
 let cachedFaviconDataUri: string | undefined;
@@ -39,15 +46,48 @@ function getFaviconDataUri(): string {
 // Claude Bridge result delivered to caller (HTTP /__claude or webview postMessage).
 type BridgeResult = { ok: boolean; mode?: string; prompt?: string; response?: string; error?: string; opened?: boolean; note?: string };
 
+// Human-friendly labels + reload-required map for toolbar config toggles.
+// Shown as an info banner when a user flips a toggle from the toolbar menu.
+const CONFIG_TOGGLE_INFO: Record<string, { label: string; reload: boolean }> = {
+    'aimaxViewer.liveInspect.enabled':       { label: 'Live Annotation',                          reload: true },
+    'aimaxViewer.liveInspect.injectBridge':  { label: 'Floating Claude button on annotated pages', reload: true },
+    'aimaxViewer.bridge.toolbarButton':      { label: 'Bridge Button in Toolbar',                  reload: true },
+};
+
+function applyConfigToggle(key: string, value: unknown): void {
+    vscode.workspace.getConfiguration().update(
+        key, value, vscode.ConfigurationTarget.Workspace
+    ).then(() => {
+        const info = CONFIG_TOGGLE_INFO[key];
+        const label = info?.label || key;
+        const state = value ? 'ON' : 'OFF';
+        const msg = `AIMax: ${label} → ${state} (saved to workspace settings)`;
+        if (info?.reload) {
+            vscode.window.showInformationMessage(msg + '. Reload required to apply.', 'Reload Window')
+                .then(choice => {
+                    if (choice === 'Reload Window') {
+                        vscode.commands.executeCommand('workbench.action.reloadWindow');
+                    }
+                });
+        } else {
+            vscode.window.showInformationMessage(msg);
+        }
+    }, (err: Error) => {
+        console.error('[AIMax] updateConfig failed:', err);
+        vscode.window.showErrorMessage(`AIMax: failed to update setting ${key}: ${err.message}`);
+    });
+}
+
 // Run Claude Bridge action for given mode/prompt and call back with result.
 // Used by both the /__claude HTTP endpoint (proxy-injected pages and skill artifacts)
 // and the toolbar Bridge dropdown (webview chrome via postMessage).
-function handleClaudeBridge(mode: string, prompt: string, callback: (result: BridgeResult) => void): void {
+function handleClaudeBridge(mode: string, prompt: string, callback: (result: BridgeResult) => void, opts?: { allowEdits?: boolean }): void {
     if (!prompt) {
         callback({ ok: false, error: 'Empty prompt' });
         return;
     }
     const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    const allowEdits = !!opts?.allowEdits;
 
     if (mode === 'vscode') {
         const claudeUri = vscode.Uri.parse(
@@ -73,7 +113,19 @@ function handleClaudeBridge(mode: string, prompt: string, callback: (result: Bri
     }
 
     if (mode === 'print') {
-        const child = spawn('claude', ['-p', '-'], {
+        // Two flavors:
+        //   chat (default) — quick conversational answer, no tools, no file changes (~60s budget)
+        //   edit (allowEdits) — full agent with auto-approved permissions (~5min budget)
+        const args = ['-p', '--no-session-persistence'];
+        if (allowEdits) {
+            args.push('--dangerously-skip-permissions');
+        } else {
+            args.push('--tools', '""');
+            args.push('--system-prompt', '"You are a concise assistant. Answer in 1-3 sentences. Do not modify any files; describe changes only if asked."');
+        }
+        args.push('-');
+        const timeoutMs = allowEdits ? 300000 : 60000;
+        const child = spawn('claude', args, {
             cwd: workspaceFolder,
             shell: true,
             env: { ...process.env }
@@ -82,23 +134,28 @@ function handleClaudeBridge(mode: string, prompt: string, callback: (result: Bri
         child.stdin.end();
         let stdout = '';
         let stderr = '';
+        let done = false;
+        const finish = (result: BridgeResult) => {
+            if (done) return;
+            done = true;
+            clearTimeout(timeout);
+            callback(result);
+        };
         const timeout = setTimeout(() => {
             child.kill();
-            callback({ ok: false, error: 'Timeout (120s)' });
-        }, 120000);
+            finish({ ok: false, mode: 'print', error: `Timeout (${timeoutMs / 1000}s)` });
+        }, timeoutMs);
         child.stdout.on('data', (data: Buffer) => { stdout += data.toString(); });
         child.stderr.on('data', (data: Buffer) => { stderr += data.toString(); });
         child.on('close', (code: number | null) => {
-            clearTimeout(timeout);
-            if (code !== 0) {
-                callback({ ok: false, error: stderr || 'Exit code ' + code });
+            if (code === 0) {
+                finish({ ok: true, mode: 'print', response: stdout });
             } else {
-                callback({ ok: true, mode: 'print', response: stdout });
+                finish({ ok: false, mode: 'print', error: stderr || `Exit code ${code}` });
             }
         });
         child.on('error', (err: Error) => {
-            clearTimeout(timeout);
-            callback({ ok: false, error: err.message });
+            finish({ ok: false, mode: 'print', error: err.message });
         });
         return;
     }
@@ -136,12 +193,14 @@ function getConfig() {
         ]),
         appsManagerEnabled: config.get<boolean>('appsManager.enabled', true),
         appsManagerRefreshInterval: config.get<number>('appsManager.refreshInterval', 30000),
+        appsManagerBurstDurationMs: config.get<number>('appsManager.burstDurationMs', 30000),
+        appsManagerBurstIntervalMs: config.get<number>('appsManager.burstIntervalMs', 3000),
         // ZeroUI layout options
         startupOpenClaudeCode: config.get<boolean>('startup.openClaudeCode', false),
         startupFocusSidebar: config.get<boolean>('startup.focusSidebar', true),
         // Live Inspect (proxy + bridge unification)
         liveInspectEnabled: config.get<boolean>('liveInspect.enabled', true),
-        liveInspectInjectBridge: config.get<boolean>('liveInspect.injectBridge', true),
+        liveInspectInjectBridge: config.get<boolean>('liveInspect.injectBridge', false),
         bridgeToolbarButton: config.get<boolean>('bridge.toolbarButton', true)
     };
 }
@@ -176,6 +235,11 @@ export function activate(context: vscode.ExtensionContext) {
 
     const config = getConfig();
     console.log('[AIMax] Config:', JSON.stringify(config));
+
+    // Snapshot reload-required toggles. Subsequent setting changes are ignored
+    // until the window is reloaded — mirrors the behaviour of bridge.toolbarButton.
+    liveInspectEnabledSnapshot = config.liveInspectEnabled;
+    liveInspectInjectBridgeSnapshot = config.liveInspectInjectBridge;
 
     // Port logic:
     // - If user set custom port (different from default 3124) → use fixed port
@@ -337,7 +401,9 @@ export function activate(context: vscode.ExtensionContext) {
 
         appsTreeProvider = new AppsTreeProvider(
             appsManager,
-            config.appsManagerRefreshInterval
+            config.appsManagerRefreshInterval,
+            config.appsManagerBurstDurationMs,
+            config.appsManagerBurstIntervalMs
         );
 
         const appsTreeView = vscode.window.createTreeView('aimaxViewer.appsTree', {
@@ -373,6 +439,54 @@ export function activate(context: vscode.ExtensionContext) {
             () => appsTreeProvider?.refresh()
         );
 
+        // Open app URL inside the AIMax Viewer browser panel
+        const openAppInViewerCmd = vscode.commands.registerCommand(
+            'aimaxViewer.openAppInViewer',
+            (item: AppTreeItem) => {
+                if (item && item.status) {
+                    vscode.commands.executeCommand(
+                        'aimaxViewer.openBrowser',
+                        item.status.healthUrl,
+                        item.status.name
+                    );
+                }
+            }
+        );
+
+        // Open app URL in the system's default browser
+        const openAppInBrowserCmd = vscode.commands.registerCommand(
+            'aimaxViewer.openAppInBrowser',
+            (item: AppTreeItem) => {
+                if (item && item.status) {
+                    vscode.env.openExternal(vscode.Uri.parse(item.status.healthUrl));
+                }
+            }
+        );
+
+        // Copy app URL to clipboard
+        const copyAppUrlCmd = vscode.commands.registerCommand(
+            'aimaxViewer.copyAppUrl',
+            (item: AppTreeItem) => {
+                if (item && item.status) {
+                    vscode.env.clipboard.writeText(item.status.healthUrl);
+                    vscode.window.showInformationMessage(`Copied ${item.status.healthUrl}`);
+                }
+            }
+        );
+
+        // Open settings.json (user) so the user can edit appsManager.apps directly
+        const editAppInSettingsCmd = vscode.commands.registerCommand(
+            'aimaxViewer.editAppInSettings',
+            async (item: AppTreeItem) => {
+                await vscode.commands.executeCommand('workbench.action.openSettingsJson');
+                if (item && item.status) {
+                    vscode.window.showInformationMessage(
+                        `Edit aimaxViewer.appsManager.apps — id: ${item.status.id}`
+                    );
+                }
+            }
+        );
+
         // Add discovered app to config
         const addAppCmd = vscode.commands.registerCommand(
             'aimaxViewer.addAppToConfig',
@@ -395,6 +509,10 @@ export function activate(context: vscode.ExtensionContext) {
             startAppCmd,
             stopAppCmd,
             refreshAppsCmd,
+            openAppInViewerCmd,
+            openAppInBrowserCmd,
+            copyAppUrlCmd,
+            editAppInSettingsCmd,
             addAppCmd
         );
 
@@ -640,7 +758,8 @@ function rewriteToProxy(url: string): string {
     // Route external localhost URLs through the AIMaxViewer proxy so the
     // annotation client and Claude Bridge can be injected. Skip our own server
     // port (already served directly). Gated by liveInspect.enabled.
-    if (!getConfig().liveInspectEnabled) return url;
+    // Uses the activation-time snapshot — config changes need a window reload.
+    if (!liveInspectEnabledSnapshot) return url;
     try {
         const u = new URL(url);
         if (u.hostname !== 'localhost' && u.hostname !== '127.0.0.1') return url;
@@ -738,16 +857,14 @@ function openInBrowser(url: string, customTitle?: string) {
             } else if (message.command === 'presentFile' && message.url) {
                 const presenterUrl = `http://127.0.0.1:${serverPort}/__presenter#${message.url}`;
                 vscode.env.openExternal(vscode.Uri.parse(presenterUrl));
+            } else if (message.command === 'makePresentable' && message.url) {
+                openMakePresentableInClaude(message.url);
             } else if (message.command === 'claudeBridge') {
                 handleClaudeBridge(message.mode, (message.prompt || '').trim(), (result) => {
                     newPanel.webview.postMessage({ command: 'bridgeResult', ...result });
-                });
+                }, { allowEdits: !!message.allowEdits });
             } else if (message.command === 'updateConfig' && message.key) {
-                vscode.workspace.getConfiguration().update(
-                    message.key, message.value, vscode.ConfigurationTarget.Workspace
-                ).then(undefined, (err: Error) => {
-                    console.error('[AIMax] updateConfig failed:', err);
-                });
+                applyConfigToggle(message.key, message.value);
             }
         });
 
@@ -794,18 +911,16 @@ function openInBrowser(url: string, customTitle?: string) {
             } else if (message.command === 'presentFile' && message.url) {
                 const presenterUrl = `http://127.0.0.1:${serverPort}/__presenter#${message.url}`;
                 vscode.env.openExternal(vscode.Uri.parse(presenterUrl));
+            } else if (message.command === 'makePresentable' && message.url) {
+                openMakePresentableInClaude(message.url);
             } else if (message.command === 'claudeBridge') {
                 handleClaudeBridge(message.mode, (message.prompt || '').trim(), (result) => {
                     if (browserPanel) {
                         browserPanel.webview.postMessage({ command: 'bridgeResult', ...result });
                     }
-                });
+                }, { allowEdits: !!message.allowEdits });
             } else if (message.command === 'updateConfig' && message.key) {
-                vscode.workspace.getConfiguration().update(
-                    message.key, message.value, vscode.ConfigurationTarget.Workspace
-                ).then(undefined, (err: Error) => {
-                    console.error('[AIMax] updateConfig failed:', err);
-                });
+                applyConfigToggle(message.key, message.value);
             }
         });
     }
@@ -994,25 +1109,35 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
             text-align: left;
         }
         .menu-item:hover { background: #3c3c3c; color: #00d4ff; }
+        .menu-item:disabled,
+        .menu-item[aria-disabled="true"] {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+        .menu-item:disabled:hover,
+        .menu-item[aria-disabled="true"]:hover {
+            background: transparent;
+            color: #cccccc;
+        }
         .menu-divider { border-top: 1px solid #3c3c3c; margin: 4px 0; }
         /* Claude Bridge toolbar button + dropdown */
         .bridge-toolbar-btn {
-            width: 28px;
-            height: 28px;
-            border-radius: 50%;
-            background: #3b82f6;
+            background: transparent;
+            border: 1px solid #3c3c3c;
             color: #fff;
-            border: none;
             cursor: pointer;
+            padding: 4px 8px;
+            border-radius: 4px;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 16px;
+            font-size: 14px;
             line-height: 1;
-            box-shadow: 0 2px 6px rgba(59,130,246,0.4);
-            padding: 0;
         }
-        .bridge-toolbar-btn:hover { background: #2563eb; }
+        .bridge-toolbar-btn:hover {
+            color: #00d4ff;
+            border-color: #00d4ff;
+        }
         .bridge-menu {
             display: none;
             position: fixed;
@@ -1059,24 +1184,23 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
             font-family: inherit;
         }
         .bridge-menu .bridge-actions {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
+            display: flex;
+            flex-wrap: wrap;
             gap: 6px;
             margin-top: 8px;
+            justify-content: flex-start;
         }
-        .bridge-menu .bridge-actions button {
-            border: none;
-            border-radius: 6px;
-            padding: 6px;
-            cursor: pointer;
+        .bridge-menu .bridge-allow-edits {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin-top: 8px;
             font-size: 11px;
-            font-weight: 600;
-            color: #1e1e2e;
+            color: #cdd6f4;
+            cursor: help;
+            user-select: none;
         }
-        .bridge-btn-copy { background: #cba6f7; }
-        .bridge-btn-term { background: #89b4fa; }
-        .bridge-btn-vsc  { background: #a6e3a1; }
-        .bridge-btn-inline { background: #f9e2af; }
+        .bridge-menu .bridge-allow-edits input { cursor: pointer; accent-color: #00d4ff; }
         .bridge-response {
             display: none;
             margin-top: 8px;
@@ -1227,6 +1351,42 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
             padding: 12px;
             text-align: center;
         }
+        .annot-response {
+            display: none;
+            margin: 6px 8px 8px 8px;
+            padding: 8px;
+            background: #181825;
+            border: 1px solid #3c3c3c;
+            border-radius: 6px;
+            color: #cdd6f4;
+            font-size: 11px;
+            max-height: 240px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-break: break-word;
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        }
+        /* Shared icon button (annotations + bridge — same actions, same look) */
+        .aimax-icon-btn {
+            background: transparent;
+            border: 1px solid #3c3c3c;
+            color: #00d4ff;
+            cursor: pointer;
+            padding: 3px 6px;
+            border-radius: 4px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 3px;
+            min-width: 26px;
+            height: 24px;
+            line-height: 1;
+            font-size: 11px;
+        }
+        .aimax-icon-btn:hover { background: #2a2a3e; border-color: #00d4ff; }
+        .aimax-icon-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+        .aimax-icon-btn .label { font-size: 10px; font-weight: 600; }
+        .aimax-icon-btn svg { display: block; }
     </style>
 </head>
 <body>
@@ -1255,27 +1415,46 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
         <button class="toolbar-btn" id="annotBtn" onclick="toggleAnnotMode()" title="Toggle annotation mode">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#00d4ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
         </button>
+        ${bridgeToolbarButton ? `
+        <button class="toolbar-btn" id="bridgeToolbarBtn" onclick="aimaxBridgeToggle()" title="Claude Bridge"><span style="color:#00d4ff;font-size:14px;line-height:1;">&#10042;</span></button>
+        ` : ''}
         <button class="toolbar-btn" onclick="openTerminal()" title="Open new terminal">
             <span style="color: #00d4ff; font-size: 14px;">&gt;</span>
         </button>
         <button class="toolbar-btn" onclick="openClaudeCode()" title="New Claude Code conversation">
-            <span style="color: #ff9500; font-size: 20px; line-height: 1;">*</span>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="#00d4ff" aria-hidden="true"><path d="M12 1.5 L13.6 9.2 L21.3 7.6 L15.7 12 L21.3 16.4 L13.6 14.8 L12 22.5 L10.4 14.8 L2.7 16.4 L8.3 12 L2.7 7.6 L10.4 9.2 Z"/></svg>
         </button>
-        ${bridgeToolbarButton ? `
-        <button class="bridge-toolbar-btn" id="bridgeToolbarBtn" onclick="aimaxBridgeToggle()" title="Claude Bridge">&#10042;</button>
-        ` : ''}
         <button class="menu-btn" onclick="toggleMenu()">☰</button>
     </div>
     <div class="annot-window" id="annotWindow">
         <div class="annot-header">
             <strong id="annotCount">Annotations (0)</strong>
-            <button onclick="copyAnnotPrompt()" title="Copy prompt">Copy</button>
-            <button onclick="annotSend('terminal')" title="Send to Terminal">&gt;Term</button>
-            <button onclick="annotSend('vscode')" title="Send to Claude Code">&gt;VSC</button>
-            <button onclick="clearAnnotations()" title="Clear all">Clear</button>
-            <button onclick="toggleAnnotMode(false)" title="Close">×</button>
+            <button class="aimax-icon-btn" onclick="copyAnnotPrompt()" title="Copy prompt">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+            </button>
+            <button class="aimax-icon-btn" onclick="annotSend('terminal')" title="Copy &amp; send to Terminal">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                <span class="label">&gt;_</span>
+            </button>
+            <button class="aimax-icon-btn" onclick="annotSend('vscode')" title="Copy &amp; send to Claude Code">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                <span class="label">&lt;/&gt;</span>
+            </button>
+            <button class="aimax-icon-btn" id="annotRunBtn" onclick="annotRun()" title="Run inline (Ask Claude)">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 1.5 L13.6 9.2 L21.3 7.6 L15.7 12 L21.3 16.4 L13.6 14.8 L12 22.5 L10.4 14.8 L2.7 16.4 L8.3 12 L2.7 7.6 L10.4 9.2 Z"/></svg>
+            </button>
+            <button class="aimax-icon-btn" onclick="annotRefresh()" title="Refresh page">
+                <span class="label">Refresh</span>
+            </button>
+            <button class="aimax-icon-btn" onclick="clearAnnotations()" title="Clear all">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>
+            </button>
+            <button class="aimax-icon-btn" onclick="toggleAnnotMode(false)" title="Close">
+                <span class="label" style="font-size:13px;">×</span>
+            </button>
         </div>
         <div class="annot-body" id="annotBody"><div class="annot-empty">Hover an element and click to add a comment.</div></div>
+        <div class="annot-response" id="annotResponse"></div>
     </div>
     <div class="bridge-menu" id="bridgeMenu">
         <div class="bridge-title">
@@ -1283,11 +1462,25 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
             <button class="bridge-close" onclick="aimaxBridgeToggle()" title="Close">&times;</button>
         </div>
         <textarea id="bridgePrompt" placeholder="Ask Claude about this page..."></textarea>
+        <label class="bridge-allow-edits" title="Allow Claude to read and modify files (skips permission prompts).&#10;Off: quick chat answer, no file changes (60s budget).&#10;On: full agent with auto-approved edits (5min budget).">
+            <input type="checkbox" id="bridgeAllowEdits" />
+            <span>Allow file edits</span>
+        </label>
         <div class="bridge-actions">
-            <button class="bridge-btn-copy" onclick="aimaxBridgeAction('copy')">Copy</button>
-            <button class="bridge-btn-term" onclick="aimaxBridgeAction('terminal',true)">Copy &amp; Terminal</button>
-            <button class="bridge-btn-vsc" onclick="aimaxBridgeAction('vscode',true)">Copy &amp; VS Code</button>
-            <button class="bridge-btn-inline" onclick="aimaxBridgeAction('print')">Ask Inline</button>
+            <button class="aimax-icon-btn" onclick="aimaxBridgeAction('copy')" title="Copy prompt">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+            </button>
+            <button class="aimax-icon-btn" onclick="aimaxBridgeAction('terminal',true)" title="Copy &amp; send to Terminal">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                <span class="label">&gt;_</span>
+            </button>
+            <button class="aimax-icon-btn" onclick="aimaxBridgeAction('vscode',true)" title="Copy &amp; send to Claude Code">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                <span class="label">&lt;/&gt;</span>
+            </button>
+            <button class="aimax-icon-btn" id="bridgeInlineBtn" onclick="aimaxBridgeAction('print')" title="Ask Claude inline">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 1.5 L13.6 9.2 L21.3 7.6 L15.7 12 L21.3 16.4 L13.6 14.8 L12 22.5 L10.4 14.8 L2.7 16.4 L8.3 12 L2.7 7.6 L10.4 9.2 Z"/></svg>
+            </button>
         </div>
         <div class="bridge-response" id="bridgeResponse"></div>
         <div class="bridge-status" id="bridgeStatus"></div>
@@ -1299,7 +1492,8 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
         <div class="menu-divider"></div>
         <!-- URL actions -->
         <button class="menu-item" onclick="copyUrl()">Copy URL</button>
-        <button class="menu-item" onclick="presentInBrowser()">Present in Browser</button>
+        <button class="menu-item" id="presentMenuItem" onclick="presentInBrowser()" disabled title="Not a slide deck (need ≥2 &lt;section&gt; elements)">Present in Browser</button>
+        <button class="menu-item" id="makePresentableMenuItem" onclick="makePresentable()" style="display:none;" title="Open Claude Code to convert this file into an AIMax-presentable deck">Make it presentable</button>
         <div class="menu-divider"></div>
         <!-- Open * group -->
         <button class="menu-item" onclick="openTerminal()">Open Terminal</button>
@@ -1308,15 +1502,12 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
         <button class="menu-item" onclick="openCurrentFile()">Open Current Editor File</button>
         <button class="menu-item" onclick="goHome()">Go to Home</button>
         <div class="menu-divider"></div>
-        <!-- Live Inspect toggles -->
+        <!-- Annotation toggles -->
         <button class="menu-item" id="toggleLiveInspectBtn" onclick="toggleLiveInspect()">
-            <span id="liveInspectStatus">${liveInspectEnabled ? '✓' : '✗'}</span> Live Inspect (Proxy)
+            <span id="liveInspectStatus">${liveInspectEnabled ? '✓' : '✗'}</span> Enable Live Annotation
         </button>
-        <button class="menu-item" id="toggleBridgeInjectBtn" onclick="toggleBridgeInject()">
-            <span id="bridgeInjectStatus">${liveInspectInjectBridge ? '✓' : '✗'}</span> Inject Bridge in Proxy Pages
-        </button>
-        <button class="menu-item" id="toggleBridgeToolbarBtn" onclick="toggleBridgeToolbar()">
-            <span id="bridgeToolbarStatus">${bridgeToolbarButton ? '✓' : '✗'}</span> Bridge Button in Toolbar
+        <button class="menu-item" id="toggleBridgeInjectBtn" onclick="toggleBridgeInject()" ${!liveInspectEnabled ? 'disabled style="opacity:0.4;cursor:not-allowed;" title="Requires Live Annotation"' : ''}>
+            <span id="bridgeInjectStatus">${liveInspectInjectBridge ? '✓' : '✗'}</span> Floating Claude button on annotated pages
         </button>
     </div>
     <iframe id="frame" src="${url}" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-top-navigation-by-user-activation allow-downloads" allow="clipboard-read; clipboard-write; fullscreen"></iframe>
@@ -1544,6 +1735,11 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
             toggleMenu();
         }
 
+        function makePresentable() {
+            vscode.postMessage({ command: 'makePresentable', url: currentUrl });
+            toggleMenu();
+        }
+
         function goHome() {
             const homeUrl = 'http://127.0.0.1:${serverPort}/${homePage}';
             navigateToUrl(homeUrl, true);
@@ -1602,14 +1798,65 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
                 const iframeTitle = frame.contentDocument?.title;
                 vscode.postMessage({ command: 'updateTitle', title: iframeTitle || currentUrl });
 
+                // Defer to the fetch-based detector below (works around the
+                // webview-iframe cross-origin restriction that blocks
+                // frame.contentDocument access).
+                detectDeckByFetch(currentUrl);
+
                 // Note: Metadata is received via postMessage from the iframe content
                 // (see message listener below)
             } catch (e) {
                 // Cross-origin - title not accessible, fallback to URL
                 console.log('[AIMax Nav] Cross-origin iframe, using URL as title');
                 vscode.postMessage({ command: 'updateTitle', title: currentUrl });
+                // Detection still runs — fetch works regardless of iframe sandbox.
+                detectDeckByFetch(currentUrl);
             }
         };
+
+        // Detect whether the current URL points at a slide deck by fetching
+        // the raw HTML and counting <section> tags. Webview-iframe is always
+        // cross-origin (vscode-webview:// vs http://127.0.0.1:port), so
+        // frame.contentDocument is blocked. This works because our local
+        // server sets Access-Control-Allow-Origin: * and the CSP allows
+        // connect-src http://127.0.0.1:*.
+        let _detectToken = 0;
+        function detectDeckByFetch(url) {
+            const presentItem = document.getElementById('presentMenuItem');
+            const makeItem = document.getElementById('makePresentableMenuItem');
+            const myToken = ++_detectToken;
+            const setState = (state, sectionCount) => {
+                if (myToken !== _detectToken) return;  // stale
+                if (presentItem) {
+                    presentItem.disabled = state !== 'isDeck';
+                    presentItem.title = state === 'isDeck'
+                        ? 'Open this deck in the slide presenter'
+                        : (state === 'crossOrigin'
+                            ? 'Cross-origin or unreachable content — cannot inspect for slides'
+                            : 'Not a slide deck (found ' + sectionCount + ' <section>, need ≥2)');
+                }
+                if (makeItem) {
+                    makeItem.style.display = state === 'notDeck' ? 'block' : 'none';
+                }
+            };
+            // Skip fetch for non-http URLs (about:blank, data:, etc.)
+            if (!/^https?:\\/\\//.test(url || '')) {
+                setState('crossOrigin', 0);
+                return;
+            }
+            fetch(url, { method: 'GET', credentials: 'omit', cache: 'no-store' })
+                .then(r => r.ok ? r.text() : Promise.reject(new Error('HTTP ' + r.status)))
+                .then(html => {
+                    const matches = html.match(/<section\\b/gi);
+                    const count = matches ? matches.length : 0;
+                    setState(count >= 2 ? 'isDeck' : 'notDeck', count);
+                })
+                .catch(_ => setState('crossOrigin', 0));
+        }
+
+        // Run detection at first load too (frame.onload fires after this script,
+        // but if currentUrl is already set we want a result immediately).
+        detectDeckByFetch(currentUrl);
 
         // Annotation mode state
         let annotActive = false;
@@ -1724,6 +1971,32 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
             setTimeout(() => { annotCount.textContent = orig; }, 1500);
         }
 
+        // Track which surface initiated an inline 'print' request so the response
+        // is rendered in the right place (annotation panel vs Bridge dropdown).
+        let annotRunPending = false;
+
+        function annotRun() {
+            if (annotRunPending) return;
+            const text = buildPromptText();
+            if (!text) return;
+            annotRunPending = true;
+            const runBtn = document.getElementById('annotRunBtn');
+            const inlineBtn = document.getElementById('bridgeInlineBtn');
+            if (runBtn) runBtn.disabled = true;
+            if (inlineBtn) inlineBtn.disabled = true;
+            const respBox = document.getElementById('annotResponse');
+            if (respBox) { respBox.style.display = 'none'; respBox.textContent = ''; }
+            const orig = annotCount.textContent;
+            annotCount.dataset.origText = orig;
+            annotCount.textContent = 'Running agent (up to 5 min)…';
+            // Annotations always run in edit mode — their purpose is to apply changes.
+            vscode.postMessage({ command: 'claudeBridge', mode: 'print', prompt: text, allowEdits: true });
+        }
+
+        function annotRefresh() {
+            reload();
+        }
+
         // --- Claude Bridge dropdown (toolbar) ---
         function aimaxBridgeToggle() {
             const m = document.getElementById('bridgeMenu');
@@ -1734,7 +2007,9 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
                 if (ta) ta.focus();
             }
         }
+        let bridgeInlinePending = false;
         function aimaxBridgeAction(mode, alsoCopy) {
+            if (mode === 'print' && bridgeInlinePending) return;
             const ta = document.getElementById('bridgePrompt');
             const status = document.getElementById('bridgeStatus');
             const respBox = document.getElementById('bridgeResponse');
@@ -1751,12 +2026,57 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
                 }
                 return;
             }
+            const allowEdits = !!(document.getElementById('bridgeAllowEdits') || {}).checked;
             const fullPrompt = 'Context: viewing ' + currentUrl + '\\n\\n' + prompt;
-            if (status) status.textContent = mode === 'print' ? 'Waiting for Claude...' : 'Sent!';
+            if (mode === 'print') {
+                bridgeInlinePending = true;
+                const inlineBtn = document.getElementById('bridgeInlineBtn');
+                const runBtn = document.getElementById('annotRunBtn');
+                if (inlineBtn) inlineBtn.disabled = true;
+                if (runBtn) runBtn.disabled = true;
+                if (status) status.textContent = allowEdits ? 'Running agent (up to 5 min)…' : 'Waiting for Claude…';
+            } else if (status) {
+                status.textContent = 'Sent!';
+            }
             if (respBox) respBox.style.display = 'none';
-            vscode.postMessage({ command: 'claudeBridge', mode: mode, prompt: fullPrompt });
+            vscode.postMessage({ command: 'claudeBridge', mode: mode, prompt: fullPrompt, allowEdits: allowEdits });
         }
         function aimaxBridgeOnResult(result) {
+            // If a >Run from the annotation panel is pending, route the inline
+            // result there instead of the Bridge dropdown.
+            if (annotRunPending && result.mode === 'print') {
+                const annotBox = document.getElementById('annotResponse');
+                const runBtn = document.getElementById('annotRunBtn');
+                const inlineBtn = document.getElementById('bridgeInlineBtn');
+                annotRunPending = false;
+                bridgeInlinePending = false;
+                if (runBtn) runBtn.disabled = false;
+                if (inlineBtn) inlineBtn.disabled = false;
+                const orig = annotCount.dataset.origText || 'Annotations (' + annotations.length + ')';
+                if (result.ok && result.response) {
+                    if (annotBox) {
+                        annotBox.textContent = result.response;
+                        annotBox.style.display = 'block';
+                    }
+                    annotCount.textContent = '✓ Done';
+                } else {
+                    annotCount.textContent = result.ok ? '✓ Sent' : 'Error';
+                    if (!result.ok && annotBox) {
+                        annotBox.textContent = 'Error: ' + (result.error || 'Unknown');
+                        annotBox.style.display = 'block';
+                    }
+                }
+                setTimeout(() => { annotCount.textContent = orig; }, 1800);
+                return;
+            }
+            // Re-enable Bridge inline button on any 'print' result.
+            if (result.mode === 'print') {
+                bridgeInlinePending = false;
+                const inlineBtn = document.getElementById('bridgeInlineBtn');
+                const runBtn = document.getElementById('annotRunBtn');
+                if (inlineBtn) inlineBtn.disabled = false;
+                if (runBtn) runBtn.disabled = false;
+            }
             const status = document.getElementById('bridgeStatus');
             const respBox = document.getElementById('bridgeResponse');
             if (!status || !respBox) return;
@@ -1779,7 +2099,6 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
         }
         let _liveInspectEnabled = ${liveInspectEnabled};
         let _liveInspectInjectBridge = ${liveInspectInjectBridge};
-        let _bridgeToolbarButton = ${bridgeToolbarButton};
         function toggleLiveInspect() {
             _liveInspectEnabled = !_liveInspectEnabled;
             _setToggleStatus('liveInspectStatus', _liveInspectEnabled);
@@ -1789,11 +2108,6 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
             _liveInspectInjectBridge = !_liveInspectInjectBridge;
             _setToggleStatus('bridgeInjectStatus', _liveInspectInjectBridge);
             vscode.postMessage({ command: 'updateConfig', key: 'aimaxViewer.liveInspect.injectBridge', value: _liveInspectInjectBridge });
-        }
-        function toggleBridgeToolbar() {
-            _bridgeToolbarButton = !_bridgeToolbarButton;
-            _setToggleStatus('bridgeToolbarStatus', _bridgeToolbarButton);
-            vscode.postMessage({ command: 'updateConfig', key: 'aimaxViewer.bridge.toolbarButton', value: _bridgeToolbarButton });
         }
 
         function removeAnnotation(n) {
@@ -1815,6 +2129,10 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
                 removeAnnotation(event.data.n);
             } else if (event.data?.command === 'bridgeResult') {
                 aimaxBridgeOnResult(event.data);
+            } else if (event.data?.command === 'presentFile' && event.data.url) {
+                vscode.postMessage({ command: 'presentFile', url: event.data.url });
+            } else if (event.data?.command === 'openExternal' && event.data.url) {
+                vscode.postMessage({ command: 'openExternal', url: event.data.url });
             }
         });
 
@@ -2009,7 +2327,8 @@ function startHttpServer(workspaceFolder: string) {
                         html = baseTag + html;
                     }
                     html = injectAnnotationClient(html);
-                    if (getConfig().liveInspectInjectBridge) {
+                    // Snapshot — reload required for changes to apply (consistent with the other toggles).
+                    if (liveInspectInjectBridgeSnapshot) {
                         html = injectBridgePanel(html);
                     }
                     res.writeHead(proxyRes.statusCode || 200, outHeaders as http.OutgoingHttpHeaders);
@@ -2047,20 +2366,23 @@ function startHttpServer(workspaceFolder: string) {
                 let prompt = '';
                 let mode = 'terminal';
 
+                let allowEdits = false;
                 try {
                     const parsed = JSON.parse(raw);
                     prompt = (parsed.prompt || '').trim();
                     mode = parsed.mode || 'terminal';
+                    allowEdits = !!parsed.allowEdits;
                 } catch {
                     prompt = raw;
                 }
 
                 const headers: Record<string, string> = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' };
                 handleClaudeBridge(mode, prompt, (result) => {
-                    const status = result.ok ? 200 : (result.error === 'Empty prompt' ? 400 : (result.error === 'Timeout (120s)' ? 504 : 500));
+                    const isTimeout = typeof result.error === 'string' && result.error.startsWith('Timeout');
+                    const status = result.ok ? 200 : (result.error === 'Empty prompt' ? 400 : (isTimeout ? 504 : 500));
                     res.writeHead(status, headers);
                     res.end(JSON.stringify(result));
-                });
+                }, { allowEdits });
             });
             return;
         }
@@ -2274,6 +2596,43 @@ function getHttpUrl(filePath: string, workspaceFolder: string): string {
     return `http://127.0.0.1:${serverPort}/${relativePath}`;
 }
 
+// Inverse of getHttpUrl: convert a local AIMax HTTP URL back to a workspace path.
+// Returns null when the URL is not served by our local server (cross-origin / external).
+function httpUrlToWorkspacePath(url: string): string | null {
+    if (!url) return null;
+    try {
+        const u = new URL(url);
+        const isLocal = (u.hostname === '127.0.0.1' || u.hostname === 'localhost') && u.port === String(serverPort);
+        if (!isLocal) return null;
+        const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        if (!workspaceFolder) return null;
+        const relPath = decodeURIComponent(u.pathname.replace(/^\//, ''));
+        return path.join(workspaceFolder, relPath);
+    } catch {
+        return null;
+    }
+}
+
+// Open Claude Code with the aimax-make-presentable skill targeting the given URL/path.
+// Embeds a fallback that fetches the skill body from GitHub if the slash command isn't installed.
+function openMakePresentableInClaude(url: string): void {
+    const filePath = httpUrlToWorkspacePath(url);
+    const arg = filePath || url;
+    const skillRawUrl = 'https://raw.githubusercontent.com/maxturazzini/aimax-viewer/main/skills/aimax-make-presentable/SKILL.md';
+    const skillPrompt = [
+        `/aimax-make-presentable ${arg}`,
+        '',
+        `If the slash command above is not recognized (skill not installed locally), do this instead:`,
+        `1. Fetch the skill body from ${skillRawUrl} (use WebFetch).`,
+        `2. Tell the user: "The aimax-make-presentable skill isn't installed locally. I'll run it from GitHub this time. To install it locally for next time: copy plugins/aimax-make-presentable/ from the aimax-viewer repo into your Claude Code skills directory."`,
+        `3. Apply the fetched skill instructions to the file: ${arg}`
+    ].join('\n');
+    const claudeUri = vscode.Uri.parse(
+        `vscode://anthropic.claude-code/open?prompt=${encodeURIComponent(skillPrompt)}`
+    );
+    vscode.env.openExternal(claudeUri);
+}
+
 // Recursively list artifact files (HTML and MD) in a directory
 async function listArtifactFiles(
     dir: string,
@@ -2386,6 +2745,17 @@ function openArtifactsHome(workspaceFolder: string, homePage: string = 'Artifact
             } else if (message.command === 'reload') {
                 // Re-render the home panel by re-reading the file
                 openArtifactsHome(workspaceFolder);
+            } else if (message.command === 'presentFile' && message.url) {
+                const presenterUrl = `http://127.0.0.1:${serverPort}/__presenter#${message.url}`;
+                vscode.env.openExternal(vscode.Uri.parse(presenterUrl));
+            } else if (message.command === 'openExternal' && message.url) {
+                vscode.env.openExternal(vscode.Uri.parse(message.url));
+            } else if (message.command === 'claudeBridge') {
+                handleClaudeBridge(message.mode, (message.prompt || '').trim(), (result) => {
+                    if (homePanel) {
+                        homePanel.webview.postMessage({ command: 'bridgeResult', ...result });
+                    }
+                }, { allowEdits: !!message.allowEdits });
             }
         });
     }
@@ -2569,6 +2939,42 @@ function wrapWithToolbarAndLinkHandler(html: string, title: string, faviconUri: 
             padding: 12px;
             text-align: center;
         }
+        .aimax-annot-response {
+            display: none;
+            margin: 6px 8px 8px 8px;
+            padding: 8px;
+            background: #181825;
+            border: 1px solid #3c3c3c;
+            border-radius: 6px;
+            color: #cdd6f4;
+            font-size: 11px;
+            max-height: 240px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-break: break-word;
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        }
+        /* Shared icon button (coherent with browser panel annotations + bridge) */
+        .aimax-icon-btn {
+            background: transparent;
+            border: 1px solid #3c3c3c;
+            color: #00d4ff;
+            cursor: pointer;
+            padding: 3px 6px;
+            border-radius: 4px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 3px;
+            min-width: 26px;
+            height: 24px;
+            line-height: 1;
+            font-size: 11px;
+        }
+        .aimax-icon-btn:hover { background: #2a2a3e; border-color: #00d4ff; }
+        .aimax-icon-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+        .aimax-icon-btn .label { font-size: 10px; font-weight: 600; }
+        .aimax-icon-btn svg { display: block; }
     </style>
     `;
 
@@ -2589,17 +2995,38 @@ function wrapWithToolbarAndLinkHandler(html: string, title: string, faviconUri: 
             <span style="font-family: monospace; font-weight: bold;">&gt;_</span>
         </button>
         <button class="aimax-toolbar-btn" onclick="openClaudeCode()" title="New Claude Code conversation">
-            <span style="color: #ff9500; font-size: 20px; line-height: 1;">*</span>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="#00d4ff" aria-hidden="true"><path d="M12 1.5 L13.6 9.2 L21.3 7.6 L15.7 12 L21.3 16.4 L13.6 14.8 L12 22.5 L10.4 14.8 L2.7 16.4 L8.3 12 L2.7 7.6 L10.4 9.2 Z"/></svg>
         </button>
     </div>
     <div class="aimax-annot-window" id="aimaxAnnotWindow" data-aimax-overlay="1">
         <div class="aimax-annot-header">
             <strong id="aimaxAnnotCount">Annotations (0)</strong>
-            <button onclick="aimaxCopyAnnotPrompt()" title="Copy prompt">Copy</button>
-            <button onclick="aimaxClearAnnot()" title="Clear all">Clear</button>
-            <button onclick="aimaxToggleAnnot(false)" title="Close">×</button>
+            <button class="aimax-icon-btn" onclick="aimaxCopyAnnotPrompt()" title="Copy prompt">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+            </button>
+            <button class="aimax-icon-btn" onclick="aimaxAnnotSend('terminal')" title="Copy &amp; send to Terminal">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                <span class="label">&gt;_</span>
+            </button>
+            <button class="aimax-icon-btn" onclick="aimaxAnnotSend('vscode')" title="Copy &amp; send to Claude Code">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                <span class="label">&lt;/&gt;</span>
+            </button>
+            <button class="aimax-icon-btn" id="aimaxAnnotRunBtn" onclick="aimaxAnnotRun()" title="Run inline (Ask Claude)">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 1.5 L13.6 9.2 L21.3 7.6 L15.7 12 L21.3 16.4 L13.6 14.8 L12 22.5 L10.4 14.8 L2.7 16.4 L8.3 12 L2.7 7.6 L10.4 9.2 Z"/></svg>
+            </button>
+            <button class="aimax-icon-btn" onclick="aimaxAnnotRefresh()" title="Refresh page">
+                <span class="label">Refresh</span>
+            </button>
+            <button class="aimax-icon-btn" onclick="aimaxClearAnnot()" title="Clear all">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>
+            </button>
+            <button class="aimax-icon-btn" onclick="aimaxToggleAnnot(false)" title="Close">
+                <span class="label" style="font-size:13px;">×</span>
+            </button>
         </div>
         <div class="aimax-annot-body" id="aimaxAnnotBody"><div class="aimax-annot-empty">Hover an element and click to add a comment.</div></div>
+        <div class="aimax-annot-response" id="aimaxAnnotResponse"></div>
     </div>
     `;
 
@@ -2757,6 +3184,56 @@ function wrapWithToolbarAndLinkHandler(html: string, title: string, faviconUri: 
             aimaxRenderAnnot();
         }
 
+        function aimaxAnnotSend(mode) {
+            const text = aimaxBuildPrompt();
+            if (!text) return;
+            vscode.postMessage({ command: 'claudeBridge', mode: mode, prompt: text });
+            const orig = aimaxAnnotCount.textContent;
+            aimaxAnnotCount.textContent = mode === 'terminal' ? '→ Terminal' : '→ VS Code';
+            setTimeout(() => { aimaxAnnotCount.textContent = orig; }, 1500);
+        }
+
+        let aimaxAnnotRunPending = false;
+
+        function aimaxAnnotRun() {
+            if (aimaxAnnotRunPending) return;
+            const text = aimaxBuildPrompt();
+            if (!text) return;
+            aimaxAnnotRunPending = true;
+            const runBtn = document.getElementById('aimaxAnnotRunBtn');
+            if (runBtn) runBtn.disabled = true;
+            const respBox = document.getElementById('aimaxAnnotResponse');
+            if (respBox) { respBox.style.display = 'none'; respBox.textContent = ''; }
+            aimaxAnnotCount.dataset.origText = aimaxAnnotCount.textContent;
+            aimaxAnnotCount.textContent = 'Running agent (up to 5 min)…';
+            // Annotations always run in edit mode — their purpose is to apply changes.
+            vscode.postMessage({ command: 'claudeBridge', mode: 'print', prompt: text, allowEdits: true });
+        }
+
+        function aimaxAnnotRefresh() {
+            reload();
+        }
+
+        function aimaxOnBridgeResult(result) {
+            if (!aimaxAnnotRunPending || result.mode !== 'print') return;
+            aimaxAnnotRunPending = false;
+            const runBtn = document.getElementById('aimaxAnnotRunBtn');
+            const respBox = document.getElementById('aimaxAnnotResponse');
+            if (runBtn) runBtn.disabled = false;
+            const orig = aimaxAnnotCount.dataset.origText || ('Annotations (' + aimaxAnnotations.length + ')');
+            if (result.ok && result.response) {
+                if (respBox) { respBox.textContent = result.response; respBox.style.display = 'block'; }
+                aimaxAnnotCount.textContent = '✓ Done';
+            } else {
+                aimaxAnnotCount.textContent = result.ok ? '✓ Sent' : 'Error';
+                if (!result.ok && respBox) {
+                    respBox.textContent = 'Error: ' + (result.error || 'Unknown');
+                    respBox.style.display = 'block';
+                }
+            }
+            setTimeout(() => { aimaxAnnotCount.textContent = orig; }, 1800);
+        }
+
         const aimaxKnownFilePath = ${JSON.stringify(filePath)};
 
         window.addEventListener('message', (event) => {
@@ -2766,6 +3243,8 @@ function wrapWithToolbarAndLinkHandler(html: string, title: string, faviconUri: 
                 aimaxRenderAnnot();
             } else if (event.data?.type === 'annot:remove' && typeof event.data.n === 'number') {
                 aimaxRemoveAnnot(event.data.n);
+            } else if (event.data?.command === 'bridgeResult') {
+                aimaxOnBridgeResult(event.data);
             }
         });
 

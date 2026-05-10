@@ -3,6 +3,7 @@ import { exec, spawn, ChildProcess } from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as http from 'http';
+import { URL } from 'url';
 
 export interface AppConfig {
     id: string;
@@ -13,12 +14,14 @@ export interface AppConfig {
     cwd: string;
     healthUrl: string;
     category?: string;
+    remote?: boolean;  // if true, app runs on a different host; status via HTTP only, no local PID/lifecycle
 }
 
 export interface AppStatus extends AppConfig {
     running: boolean;
     pid?: number;
     uptime?: number;
+    remote: boolean;  // resolved at status time (explicit field or derived from healthUrl host)
 }
 
 export interface DiscoveredApp {
@@ -35,13 +38,23 @@ export class AppsManager {
     private workspaceRoot: string;
     private runningProcesses: Map<string, ChildProcess> = new Map();
     private startTimes: Map<string, number> = new Map();
-    private _portsQueryRunning = false;
+    private _portsQueryInflight: Promise<{ port: number; pid: number; process: string }[]> | null = null;
     private _cachedPorts: { port: number; pid: number; process: string }[] = [];
     private _cachedPortsTime = 0;
     private static PORTS_CACHE_TTL = 4000; // ms - cache lsof results to avoid spawn storms
 
     constructor(workspaceRoot: string) {
         this.workspaceRoot = workspaceRoot;
+    }
+
+    isRemoteApp(app: AppConfig): boolean {
+        if (typeof app.remote === 'boolean') return app.remote;
+        try {
+            const host = new URL(app.healthUrl).hostname.toLowerCase();
+            return !(host === '127.0.0.1' || host === 'localhost' || host === '::1' || host === '0.0.0.0');
+        } catch {
+            return false;
+        }
     }
 
     private getAppsFromSettings(): AppConfig[] {
@@ -54,23 +67,32 @@ export class AppsManager {
     }
 
     async getStatus(): Promise<AppStatus[]> {
-        const statuses: AppStatus[] = [];
         const apps = this.getAppsFromSettings();
 
-        for (const app of apps) {
-            const portInfo = await this.checkPort(app.port);
-            const running = portInfo !== null;
+        // Health-check all apps in parallel via HTTP (lightweight, no lsof)
+        const checks = apps.map(async (app) => {
+            const remote = this.isRemoteApp(app);
+            const running = await this.checkHealth(app.healthUrl);
             const startTime = this.startTimes.get(app.id);
 
-            statuses.push({
-                ...app,
-                running,
-                pid: portInfo?.pid,
-                uptime: running && startTime ? Date.now() - startTime : undefined
-            });
-        }
+            // PID/uptime only meaningful for locally-managed apps; skip lsof for remote
+            let pid: number | undefined;
+            if (running && !remote) {
+                const portInfo = await this.checkPort(app.port);
+                pid = portInfo?.pid;
+            }
 
-        return statuses;
+            const status: AppStatus = {
+                ...app,
+                remote,
+                running,
+                pid,
+                uptime: running && startTime ? Date.now() - startTime : undefined
+            };
+            return status;
+        });
+
+        return Promise.all(checks);
     }
 
     async startApp(appId: string): Promise<boolean> {
@@ -146,6 +168,16 @@ export class AppsManager {
             return false;
         }
 
+        // Refuse to kill local processes for an app whose healthUrl is remote.
+        // Without a custom stopCmd, killByPort would target a local PID that
+        // happens to listen on the same port — almost certainly wrong.
+        if (this.isRemoteApp(app) && !app.stopCmd) {
+            vscode.window.showErrorMessage(
+                `${app.name}: cannot stop a remote app from here. Configure 'stopCmd' in settings or stop it on the host.`
+            );
+            return false;
+        }
+
         try {
             if (app.stopCmd) {
                 // Use custom stop command
@@ -208,52 +240,53 @@ export class AppsManager {
             return this._cachedPorts;
         }
 
-        // Guard: if a query is already running, return stale cache
-        if (this._portsQueryRunning) {
-            return this._cachedPorts;
+        // If a query is already in flight, await the same Promise instead of
+        // returning a stale (possibly empty) cache.
+        if (this._portsQueryInflight) {
+            return this._portsQueryInflight;
         }
 
-        this._portsQueryRunning = true;
+        const queryPromise = new Promise<{ port: number; pid: number; process: string }[]>((resolve) => {
+            exec('lsof -iTCP -sTCP:LISTEN -P -n', (error, stdout) => {
+                if (error) {
+                    resolve([]);
+                    return;
+                }
 
-        try {
-            const ports = await new Promise<{ port: number; pid: number; process: string }[]>((resolve) => {
-                exec('lsof -iTCP -sTCP:LISTEN -P -n', (error, stdout) => {
-                    if (error) {
-                        resolve([]);
-                        return;
-                    }
+                const result: { port: number; pid: number; process: string }[] = [];
+                const lines = stdout.split('\n').slice(1); // Skip header
 
-                    const result: { port: number; pid: number; process: string }[] = [];
-                    const lines = stdout.split('\n').slice(1); // Skip header
+                for (const line of lines) {
+                    const parts = line.trim().split(/\s+/);
+                    if (parts.length >= 9) {
+                        const processName = parts[0];
+                        const pid = parseInt(parts[1], 10);
+                        const address = parts[8];
 
-                    for (const line of lines) {
-                        const parts = line.trim().split(/\s+/);
-                        if (parts.length >= 9) {
-                            const processName = parts[0];
-                            const pid = parseInt(parts[1], 10);
-                            const address = parts[8];
-
-                            // Extract port from address (e.g., "127.0.0.1:3124" or "*:3124")
-                            const portMatch = address.match(/:(\d+)$/);
-                            if (portMatch) {
-                                const port = parseInt(portMatch[1], 10);
-                                // Avoid duplicates
-                                if (!result.find(p => p.port === port && p.pid === pid)) {
-                                    result.push({ port, pid, process: processName });
-                                }
+                        // Extract port from address (e.g., "127.0.0.1:3124" or "*:3124")
+                        const portMatch = address.match(/:(\d+)$/);
+                        if (portMatch) {
+                            const port = parseInt(portMatch[1], 10);
+                            // Avoid duplicates
+                            if (!result.find(p => p.port === port && p.pid === pid)) {
+                                result.push({ port, pid, process: processName });
                             }
                         }
                     }
+                }
 
-                    resolve(result);
-                });
+                resolve(result);
             });
+        });
 
+        this._portsQueryInflight = queryPromise;
+        try {
+            const ports = await queryPromise;
             this._cachedPorts = ports;
             this._cachedPortsTime = Date.now();
             return ports;
         } finally {
-            this._portsQueryRunning = false;
+            this._portsQueryInflight = null;
         }
     }
 
@@ -362,14 +395,16 @@ export class AppsManager {
 
     private checkHealth(url: string): Promise<boolean> {
         return new Promise((resolve) => {
-            const timeout = setTimeout(() => {
-                resolve(false);
-            }, 2000);
-
-            http.get(url, (res) => {
+            const req = http.get(url, (res) => {
                 clearTimeout(timeout);
+                res.resume(); // drain to free the socket
                 resolve(res.statusCode !== undefined && res.statusCode >= 200 && res.statusCode < 500);
-            }).on('error', () => {
+            });
+            const timeout = setTimeout(() => {
+                req.destroy();
+                resolve(false);
+            }, 1500);
+            req.on('error', () => {
                 clearTimeout(timeout);
                 resolve(false);
             });
