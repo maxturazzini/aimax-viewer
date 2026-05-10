@@ -5,6 +5,7 @@ import * as http from 'http';
 import { execFile, spawn } from 'child_process';
 import { parseMarkdown, wrapMarkdownHtml, extractFrontmatter } from './markdown-parser';
 import { ANNOTATION_CLIENT_JS, injectAnnotationClient } from './annotation-client';
+import { injectBridgePanel } from './bridge-panel';
 import { ArtifactsTreeProvider, ArtifactsWebviewProvider, ArtifactItem, FolderConfig } from './treeview-provider';
 import { RecentsWebviewProvider } from './recents-provider';
 import { AppsManager } from './apps-manager';
@@ -35,6 +36,81 @@ function getFaviconDataUri(): string {
     return cachedFaviconDataUri;
 }
 
+// Claude Bridge result delivered to caller (HTTP /__claude or webview postMessage).
+type BridgeResult = { ok: boolean; mode?: string; prompt?: string; response?: string; error?: string; opened?: boolean; note?: string };
+
+// Run Claude Bridge action for given mode/prompt and call back with result.
+// Used by both the /__claude HTTP endpoint (proxy-injected pages and skill artifacts)
+// and the toolbar Bridge dropdown (webview chrome via postMessage).
+function handleClaudeBridge(mode: string, prompt: string, callback: (result: BridgeResult) => void): void {
+    if (!prompt) {
+        callback({ ok: false, error: 'Empty prompt' });
+        return;
+    }
+    const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+
+    if (mode === 'vscode') {
+        const claudeUri = vscode.Uri.parse(
+            `vscode://anthropic.claude-code/open?prompt=${encodeURIComponent(prompt)}`
+        );
+        vscode.env.clipboard.writeText(prompt).then(() => {
+            return vscode.env.openExternal(claudeUri);
+        }).then((opened) => {
+            callback({ ok: true, mode: 'vscode', prompt, opened, note: 'Prompt pre-filled in Claude Code panel.' });
+        }, (err: Error) => {
+            callback({ ok: false, error: err.message || String(err) });
+        });
+        return;
+    }
+
+    if (mode === 'terminal') {
+        const terminal = vscode.window.createTerminal('Claude Code');
+        terminal.show();
+        const escaped = prompt.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\$/g, '\\$').replace(/`/g, '\\`').replace(/'/g, "'\\''");
+        terminal.sendText(`claude "${escaped}"`);
+        callback({ ok: true, mode: 'terminal', prompt });
+        return;
+    }
+
+    if (mode === 'print') {
+        const child = spawn('claude', ['-p', '-'], {
+            cwd: workspaceFolder,
+            shell: true,
+            env: { ...process.env }
+        });
+        child.stdin.write(prompt);
+        child.stdin.end();
+        let stdout = '';
+        let stderr = '';
+        const timeout = setTimeout(() => {
+            child.kill();
+            callback({ ok: false, error: 'Timeout (120s)' });
+        }, 120000);
+        child.stdout.on('data', (data: Buffer) => { stdout += data.toString(); });
+        child.stderr.on('data', (data: Buffer) => { stderr += data.toString(); });
+        child.on('close', (code: number | null) => {
+            clearTimeout(timeout);
+            if (code !== 0) {
+                callback({ ok: false, error: stderr || 'Exit code ' + code });
+            } else {
+                callback({ ok: true, mode: 'print', response: stdout });
+            }
+        });
+        child.on('error', (err: Error) => {
+            clearTimeout(timeout);
+            callback({ ok: false, error: err.message });
+        });
+        return;
+    }
+
+    if (mode === 'copy') {
+        callback({ ok: true, mode: 'copy', prompt });
+        return;
+    }
+
+    callback({ ok: false, error: 'Unknown mode: ' + mode });
+}
+
 
 // Settings
 function getConfig() {
@@ -62,7 +138,11 @@ function getConfig() {
         appsManagerRefreshInterval: config.get<number>('appsManager.refreshInterval', 30000),
         // ZeroUI layout options
         startupOpenClaudeCode: config.get<boolean>('startup.openClaudeCode', false),
-        startupFocusSidebar: config.get<boolean>('startup.focusSidebar', true)
+        startupFocusSidebar: config.get<boolean>('startup.focusSidebar', true),
+        // Live Inspect (proxy + bridge unification)
+        liveInspectEnabled: config.get<boolean>('liveInspect.enabled', true),
+        liveInspectInjectBridge: config.get<boolean>('liveInspect.injectBridge', true),
+        bridgeToolbarButton: config.get<boolean>('bridge.toolbarButton', true)
     };
 }
 
@@ -558,7 +638,9 @@ export function activate(context: vscode.ExtensionContext) {
 
 function rewriteToProxy(url: string): string {
     // Route external localhost URLs through the AIMaxViewer proxy so the
-    // annotation client can be injected. Skip our own server port (already injected).
+    // annotation client and Claude Bridge can be injected. Skip our own server
+    // port (already served directly). Gated by liveInspect.enabled.
+    if (!getConfig().liveInspectEnabled) return url;
     try {
         const u = new URL(url);
         if (u.hostname !== 'localhost' && u.hostname !== '127.0.0.1') return url;
@@ -656,6 +738,16 @@ function openInBrowser(url: string, customTitle?: string) {
             } else if (message.command === 'presentFile' && message.url) {
                 const presenterUrl = `http://127.0.0.1:${serverPort}/__presenter#${message.url}`;
                 vscode.env.openExternal(vscode.Uri.parse(presenterUrl));
+            } else if (message.command === 'claudeBridge') {
+                handleClaudeBridge(message.mode, (message.prompt || '').trim(), (result) => {
+                    newPanel.webview.postMessage({ command: 'bridgeResult', ...result });
+                });
+            } else if (message.command === 'updateConfig' && message.key) {
+                vscode.workspace.getConfiguration().update(
+                    message.key, message.value, vscode.ConfigurationTarget.Workspace
+                ).then(undefined, (err: Error) => {
+                    console.error('[AIMax] updateConfig failed:', err);
+                });
             }
         });
 
@@ -702,6 +794,18 @@ function openInBrowser(url: string, customTitle?: string) {
             } else if (message.command === 'presentFile' && message.url) {
                 const presenterUrl = `http://127.0.0.1:${serverPort}/__presenter#${message.url}`;
                 vscode.env.openExternal(vscode.Uri.parse(presenterUrl));
+            } else if (message.command === 'claudeBridge') {
+                handleClaudeBridge(message.mode, (message.prompt || '').trim(), (result) => {
+                    if (browserPanel) {
+                        browserPanel.webview.postMessage({ command: 'bridgeResult', ...result });
+                    }
+                });
+            } else if (message.command === 'updateConfig' && message.key) {
+                vscode.workspace.getConfiguration().update(
+                    message.key, message.value, vscode.ConfigurationTarget.Workspace
+                ).then(undefined, (err: Error) => {
+                    console.error('[AIMax] updateConfig failed:', err);
+                });
             }
         });
     }
@@ -715,7 +819,11 @@ function openInBrowser(url: string, customTitle?: string) {
 
 function getBrowserHtml(url: string, title: string, faviconUri: string, showDropdown: boolean = true): string {
     const csp = generateCSP();
-    const homePage = getConfig().homePage;
+    const cfg = getConfig();
+    const homePage = cfg.homePage;
+    const liveInspectEnabled = cfg.liveInspectEnabled;
+    const liveInspectInjectBridge = cfg.liveInspectInjectBridge;
+    const bridgeToolbarButton = cfg.bridgeToolbarButton;
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -887,6 +995,108 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
         }
         .menu-item:hover { background: #3c3c3c; color: #00d4ff; }
         .menu-divider { border-top: 1px solid #3c3c3c; margin: 4px 0; }
+        /* Claude Bridge toolbar button + dropdown */
+        .bridge-toolbar-btn {
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            background: #3b82f6;
+            color: #fff;
+            border: none;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 16px;
+            line-height: 1;
+            box-shadow: 0 2px 6px rgba(59,130,246,0.4);
+            padding: 0;
+        }
+        .bridge-toolbar-btn:hover { background: #2563eb; }
+        .bridge-menu {
+            display: none;
+            position: fixed;
+            top: 44px;
+            right: 60px;
+            background: #252526;
+            border: 1px solid #3c3c3c;
+            border-radius: 8px;
+            padding: 12px;
+            z-index: 100000;
+            width: 320px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        }
+        .bridge-menu.open { display: block; }
+        .bridge-menu .bridge-title {
+            color: #cdd6f4;
+            font-weight: 600;
+            font-size: 13px;
+            margin-bottom: 8px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .bridge-menu .bridge-close {
+            background: none;
+            border: none;
+            color: #888;
+            cursor: pointer;
+            font-size: 16px;
+            line-height: 1;
+            padding: 0;
+        }
+        .bridge-menu textarea {
+            width: 100%;
+            height: 80px;
+            background: #181825;
+            color: #cdd6f4;
+            border: 1px solid #555;
+            border-radius: 6px;
+            padding: 8px;
+            font-size: 12px;
+            resize: vertical;
+            box-sizing: border-box;
+            font-family: inherit;
+        }
+        .bridge-menu .bridge-actions {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 6px;
+            margin-top: 8px;
+        }
+        .bridge-menu .bridge-actions button {
+            border: none;
+            border-radius: 6px;
+            padding: 6px;
+            cursor: pointer;
+            font-size: 11px;
+            font-weight: 600;
+            color: #1e1e2e;
+        }
+        .bridge-btn-copy { background: #cba6f7; }
+        .bridge-btn-term { background: #89b4fa; }
+        .bridge-btn-vsc  { background: #a6e3a1; }
+        .bridge-btn-inline { background: #f9e2af; }
+        .bridge-response {
+            display: none;
+            margin-top: 8px;
+            padding: 8px;
+            background: #181825;
+            border-radius: 6px;
+            color: #cdd6f4;
+            font-size: 12px;
+            max-height: 200px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+        .bridge-status {
+            margin-top: 6px;
+            font-size: 10px;
+            color: #888;
+            text-align: center;
+            min-height: 12px;
+        }
         iframe {
             flex: 1;
             border: none;
@@ -1051,26 +1261,63 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
         <button class="toolbar-btn" onclick="openClaudeCode()" title="New Claude Code conversation">
             <span style="color: #ff9500; font-size: 20px; line-height: 1;">*</span>
         </button>
+        ${bridgeToolbarButton ? `
+        <button class="bridge-toolbar-btn" id="bridgeToolbarBtn" onclick="aimaxBridgeToggle()" title="Claude Bridge">&#10042;</button>
+        ` : ''}
         <button class="menu-btn" onclick="toggleMenu()">☰</button>
     </div>
     <div class="annot-window" id="annotWindow">
         <div class="annot-header">
             <strong id="annotCount">Annotations (0)</strong>
             <button onclick="copyAnnotPrompt()" title="Copy prompt">Copy</button>
+            <button onclick="annotSend('terminal')" title="Send to Terminal">&gt;Term</button>
+            <button onclick="annotSend('vscode')" title="Send to Claude Code">&gt;VSC</button>
             <button onclick="clearAnnotations()" title="Clear all">Clear</button>
             <button onclick="toggleAnnotMode(false)" title="Close">×</button>
         </div>
         <div class="annot-body" id="annotBody"><div class="annot-empty">Hover an element and click to add a comment.</div></div>
     </div>
+    <div class="bridge-menu" id="bridgeMenu">
+        <div class="bridge-title">
+            <span>Claude Bridge</span>
+            <button class="bridge-close" onclick="aimaxBridgeToggle()" title="Close">&times;</button>
+        </div>
+        <textarea id="bridgePrompt" placeholder="Ask Claude about this page..."></textarea>
+        <div class="bridge-actions">
+            <button class="bridge-btn-copy" onclick="aimaxBridgeAction('copy')">Copy</button>
+            <button class="bridge-btn-term" onclick="aimaxBridgeAction('terminal',true)">Copy &amp; Terminal</button>
+            <button class="bridge-btn-vsc" onclick="aimaxBridgeAction('vscode',true)">Copy &amp; VS Code</button>
+            <button class="bridge-btn-inline" onclick="aimaxBridgeAction('print')">Ask Inline</button>
+        </div>
+        <div class="bridge-response" id="bridgeResponse"></div>
+        <div class="bridge-status" id="bridgeStatus"></div>
+    </div>
     <div class="menu" id="menu">
+        <!-- Page actions -->
         <button class="menu-item" onclick="reload()">Reload</button>
+        <button class="menu-item" onclick="toggleAnnotMode()">Annotation Mode</button>
+        <div class="menu-divider"></div>
+        <!-- URL actions -->
         <button class="menu-item" onclick="copyUrl()">Copy URL</button>
-        <!-- WIP: Export PDF disabled - needs VS Code file system API -->
-        <button class="menu-item" onclick="openExternal()">Open in External Browser</button>
         <button class="menu-item" onclick="presentInBrowser()">Present in Browser</button>
         <div class="menu-divider"></div>
-        <button class="menu-item" onclick="goHome()">Go to Home</button>
+        <!-- Open * group -->
+        <button class="menu-item" onclick="openTerminal()">Open Terminal</button>
+        <button class="menu-item" onclick="openClaudeCode()">Open Claude Code</button>
+        <button class="menu-item" onclick="openExternal()">Open External Browser</button>
         <button class="menu-item" onclick="openCurrentFile()">Open Current Editor File</button>
+        <button class="menu-item" onclick="goHome()">Go to Home</button>
+        <div class="menu-divider"></div>
+        <!-- Live Inspect toggles -->
+        <button class="menu-item" id="toggleLiveInspectBtn" onclick="toggleLiveInspect()">
+            <span id="liveInspectStatus">${liveInspectEnabled ? '✓' : '✗'}</span> Live Inspect (Proxy)
+        </button>
+        <button class="menu-item" id="toggleBridgeInjectBtn" onclick="toggleBridgeInject()">
+            <span id="bridgeInjectStatus">${liveInspectInjectBridge ? '✓' : '✗'}</span> Inject Bridge in Proxy Pages
+        </button>
+        <button class="menu-item" id="toggleBridgeToolbarBtn" onclick="toggleBridgeToolbar()">
+            <span id="bridgeToolbarStatus">${bridgeToolbarButton ? '✓' : '✗'}</span> Bridge Button in Toolbar
+        </button>
     </div>
     <iframe id="frame" src="${url}" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-top-navigation-by-user-activation allow-downloads" allow="clipboard-read; clipboard-write; fullscreen"></iframe>
 
@@ -1468,6 +1715,87 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
             } catch (err) {}
         }
 
+        function annotSend(mode) {
+            const text = buildPromptText();
+            if (!text) return;
+            vscode.postMessage({ command: 'claudeBridge', mode: mode, prompt: text });
+            const orig = annotCount.textContent;
+            annotCount.textContent = mode === 'terminal' ? '→ Terminal' : '→ VS Code';
+            setTimeout(() => { annotCount.textContent = orig; }, 1500);
+        }
+
+        // --- Claude Bridge dropdown (toolbar) ---
+        function aimaxBridgeToggle() {
+            const m = document.getElementById('bridgeMenu');
+            if (!m) return;
+            m.classList.toggle('open');
+            if (m.classList.contains('open')) {
+                const ta = document.getElementById('bridgePrompt');
+                if (ta) ta.focus();
+            }
+        }
+        function aimaxBridgeAction(mode, alsoCopy) {
+            const ta = document.getElementById('bridgePrompt');
+            const status = document.getElementById('bridgeStatus');
+            const respBox = document.getElementById('bridgeResponse');
+            const prompt = (ta && ta.value || '').trim();
+            if (!prompt) return;
+            if (alsoCopy) {
+                vscode.postMessage({ command: 'copyToClipboard', text: prompt });
+            }
+            if (mode === 'copy') {
+                vscode.postMessage({ command: 'copyToClipboard', text: prompt });
+                if (status) {
+                    status.textContent = 'Copied!';
+                    setTimeout(() => { status.textContent = ''; }, 1500);
+                }
+                return;
+            }
+            const fullPrompt = 'Context: viewing ' + currentUrl + '\\n\\n' + prompt;
+            if (status) status.textContent = mode === 'print' ? 'Waiting for Claude...' : 'Sent!';
+            if (respBox) respBox.style.display = 'none';
+            vscode.postMessage({ command: 'claudeBridge', mode: mode, prompt: fullPrompt });
+        }
+        function aimaxBridgeOnResult(result) {
+            const status = document.getElementById('bridgeStatus');
+            const respBox = document.getElementById('bridgeResponse');
+            if (!status || !respBox) return;
+            if (result.ok && result.mode === 'print' && result.response) {
+                respBox.textContent = result.response;
+                respBox.style.display = 'block';
+                status.textContent = '';
+            } else if (result.ok) {
+                status.textContent = 'Sent to Claude!';
+                setTimeout(() => { status.textContent = ''; }, 2000);
+            } else {
+                status.textContent = 'Error: ' + (result.error || 'Unknown');
+            }
+        }
+
+        // --- Live Inspect toggles ---
+        function _setToggleStatus(spanId, value) {
+            const el = document.getElementById(spanId);
+            if (el) el.textContent = value ? '✓' : '✗';
+        }
+        let _liveInspectEnabled = ${liveInspectEnabled};
+        let _liveInspectInjectBridge = ${liveInspectInjectBridge};
+        let _bridgeToolbarButton = ${bridgeToolbarButton};
+        function toggleLiveInspect() {
+            _liveInspectEnabled = !_liveInspectEnabled;
+            _setToggleStatus('liveInspectStatus', _liveInspectEnabled);
+            vscode.postMessage({ command: 'updateConfig', key: 'aimaxViewer.liveInspect.enabled', value: _liveInspectEnabled });
+        }
+        function toggleBridgeInject() {
+            _liveInspectInjectBridge = !_liveInspectInjectBridge;
+            _setToggleStatus('bridgeInjectStatus', _liveInspectInjectBridge);
+            vscode.postMessage({ command: 'updateConfig', key: 'aimaxViewer.liveInspect.injectBridge', value: _liveInspectInjectBridge });
+        }
+        function toggleBridgeToolbar() {
+            _bridgeToolbarButton = !_bridgeToolbarButton;
+            _setToggleStatus('bridgeToolbarStatus', _bridgeToolbarButton);
+            vscode.postMessage({ command: 'updateConfig', key: 'aimaxViewer.bridge.toolbarButton', value: _bridgeToolbarButton });
+        }
+
         function removeAnnotation(n) {
             annotations = annotations.filter(a => a.n !== n);
             renderAnnotations();
@@ -1485,6 +1813,8 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
                 renderAnnotations();
             } else if (event.data?.type === 'annot:remove' && typeof event.data.n === 'number') {
                 removeAnnotation(event.data.n);
+            } else if (event.data?.command === 'bridgeResult') {
+                aimaxBridgeOnResult(event.data);
             }
         });
 
@@ -1661,7 +1991,13 @@ function startHttpServer(workspaceFolder: string) {
                     return;
                 }
 
-                // Buffer HTML to inject annotation client + base href for relative URLs
+                // Strip CSP on proxied HTML responses: required so inline-script
+                // injections (annotation, bridge) are not blocked by apps with
+                // strict CSP (e.g. Streamlit). Affects only proxied HTML.
+                delete outHeaders['content-security-policy'];
+                delete outHeaders['content-security-policy-report-only'];
+
+                // Buffer HTML to inject annotation client + bridge + base href
                 const chunks: Buffer[] = [];
                 proxyRes.on('data', (c: Buffer) => chunks.push(c));
                 proxyRes.on('end', () => {
@@ -1673,6 +2009,9 @@ function startHttpServer(workspaceFolder: string) {
                         html = baseTag + html;
                     }
                     html = injectAnnotationClient(html);
+                    if (getConfig().liveInspectInjectBridge) {
+                        html = injectBridgePanel(html);
+                    }
                     res.writeHead(proxyRes.statusCode || 200, outHeaders as http.OutgoingHttpHeaders);
                     res.end(html);
                 });
@@ -1708,7 +2047,6 @@ function startHttpServer(workspaceFolder: string) {
                 let prompt = '';
                 let mode = 'terminal';
 
-                // Try JSON parse, fall back to plain text
                 try {
                     const parsed = JSON.parse(raw);
                     prompt = (parsed.prompt || '').trim();
@@ -1717,95 +2055,12 @@ function startHttpServer(workspaceFolder: string) {
                     prompt = raw;
                 }
 
-                if (!prompt) {
-                    res.writeHead(400, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
-                    res.end(JSON.stringify({ error: 'Empty prompt' }));
-                    return;
-                }
-
                 const headers: Record<string, string> = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' };
-
-                if (mode === 'vscode') {
-                    // Use official Claude Code URI handler to pre-fill the prompt box.
-                    // Clipboard write kept as fallback for older Claude Code versions.
-                    const claudeUri = vscode.Uri.parse(
-                        `vscode://anthropic.claude-code/open?prompt=${encodeURIComponent(prompt)}`
-                    );
-                    vscode.env.clipboard.writeText(prompt).then(() => {
-                        return vscode.env.openExternal(claudeUri);
-                    }).then((opened) => {
-                        res.writeHead(200, headers);
-                        res.end(JSON.stringify({
-                            ok: true,
-                            mode: 'vscode',
-                            prompt,
-                            opened,
-                            note: 'Prompt pre-filled in Claude Code panel.'
-                        }));
-                    }, (err: Error) => {
-                        res.writeHead(500, headers);
-                        res.end(JSON.stringify({ ok: false, error: err.message || String(err) }));
-                    });
-                } else if (mode === 'terminal') {
-                    // Open interactive Claude session in terminal with prompt
-                    const terminal = vscode.window.createTerminal('Claude Code');
-                    terminal.show();
-                    const escaped = prompt.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\$/g, '\\$').replace(/`/g, '\\`').replace(/'/g, "'\\''");
-                    terminal.sendText(`claude "${escaped}"`);
-                    res.writeHead(200, headers);
-                    res.end(JSON.stringify({ ok: true, mode: 'terminal', prompt }));
-                } else if (mode === 'print') {
-                    // Non-interactive: run claude -p and return the response via stdin
-                    console.log('[AIMax] print mode: spawning claude -p -, cwd:', workspaceFolder);
-                    const child = spawn('claude', ['-p', '-'], {
-                        cwd: workspaceFolder,
-                        shell: true,
-                        env: { ...process.env }
-                    });
-                    child.stdin.write(prompt);
-                    child.stdin.end();
-                    console.log('[AIMax] print mode: wrote prompt to stdin, length:', prompt.length);
-                    let stdout = '';
-                    let stderr = '';
-                    const timeout = setTimeout(() => {
-                        child.kill();
-                        console.log('[AIMax] print mode: TIMEOUT after 120s. stdout so far:', stdout.length, 'chars. stderr:', stderr);
-                        res.writeHead(504, headers);
-                        res.end(JSON.stringify({ ok: false, error: 'Timeout (120s)' }));
-                    }, 120000);
-                    child.stdout.on('data', (data: Buffer) => {
-                        stdout += data.toString();
-                        console.log('[AIMax] print mode: stdout chunk, total:', stdout.length);
-                    });
-                    child.stderr.on('data', (data: Buffer) => {
-                        stderr += data.toString();
-                        console.log('[AIMax] print mode: stderr:', data.toString().trim());
-                    });
-                    child.on('close', (code: number | null) => {
-                        clearTimeout(timeout);
-                        console.log('[AIMax] print mode: process closed, code:', code, 'stdout:', stdout.length, 'stderr:', stderr.length);
-                        if (code !== 0) {
-                            res.writeHead(500, headers);
-                            res.end(JSON.stringify({ ok: false, error: stderr || 'Exit code ' + code }));
-                        } else {
-                            res.writeHead(200, headers);
-                            res.end(JSON.stringify({ ok: true, mode: 'print', response: stdout }));
-                        }
-                    });
-                    child.on('error', (err: Error) => {
-                        clearTimeout(timeout);
-                        console.log('[AIMax] print mode: spawn error:', err.message);
-                        res.writeHead(500, headers);
-                        res.end(JSON.stringify({ ok: false, error: err.message }));
-                    });
-                } else if (mode === 'copy') {
-                    // Just echo back the prompt for client-side clipboard handling
-                    res.writeHead(200, headers);
-                    res.end(JSON.stringify({ ok: true, mode: 'copy', prompt }));
-                } else {
-                    res.writeHead(400, headers);
-                    res.end(JSON.stringify({ ok: false, error: 'Unknown mode: ' + mode }));
-                }
+                handleClaudeBridge(mode, prompt, (result) => {
+                    const status = result.ok ? 200 : (result.error === 'Empty prompt' ? 400 : (result.error === 'Timeout (120s)' ? 504 : 500));
+                    res.writeHead(status, headers);
+                    res.end(JSON.stringify(result));
+                });
             });
             return;
         }

@@ -2,7 +2,7 @@
   "name": "aimax-viewer",
   "displayName": "AIMax Viewer",
   "description": "Auto-open Artifacts at startup + internal browser for localhost",
-  "version": "0.1.29",
+  "version": "0.1.30",
   "publisher": "maxturazzini",
   "icon": "icon.png",
   "repository": {
@@ -295,6 +295,21 @@
             ]
           },
           "description": "Folders to browse for artifacts. Each with label and relative path."
+        },
+        "aimaxViewer.liveInspect.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Live Inspect: route external localhost URLs through AIMax proxy to enable Annotation Mode and Claude Bridge injection on dev servers (Vite, Streamlit, FastAPI...). Disable to load apps directly (no annotation, no bridge injection)."
+        },
+        "aimaxViewer.liveInspect.injectBridge": {
+          "type": "boolean",
+          "default": true,
+          "description": "When Live Inspect is enabled, inject the Claude Bridge floating panel into proxied HTML pages. Only effective if liveInspect.enabled is true."
+        },
+        "aimaxViewer.bridge.toolbarButton": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show Claude Bridge button in the Browser panel toolbar. The button opens a dropdown panel inside the webview chrome (independent of the proxy)."
         },
         "aimaxViewer.appsManager.enabled": {
           "type": "boolean",

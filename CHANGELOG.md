@@ -2,6 +2,26 @@
 
 All notable changes to the AIMax Viewer extension will be documented in this file.
 
+## [0.1.30] - 2026-05-09
+
+### Added
+- **Live Inspect toggle**: New `aimaxViewer.liveInspect.enabled` setting (default `true`) controls whether external localhost URLs are routed through the AIMax reverse proxy. When on, Annotation Mode and Claude Bridge can be injected into dev-server pages (Vite, Streamlit, FastAPI…). When off, apps load directly with no injection. Toggle is also available in the hamburger menu of the Browser panel.
+- **Auto Claude Bridge injection in proxied pages**: When Live Inspect is enabled and `aimaxViewer.liveInspect.injectBridge` is `true` (default), the Claude Bridge floating panel is automatically injected into every proxied HTML response, alongside the annotation client. Any local web app gains a "Send to Claude" button without source-code changes.
+- **Bridge button in Browser toolbar**: New round blue button in the Browser panel toolbar (controlled by `aimaxViewer.bridge.toolbarButton`, default `true`) opens a Claude Bridge dropdown with textarea + Copy / Terminal / VS Code / Inline actions. Lives in the webview chrome — works for any URL, file or app, independently of the proxy.
+- **Annotation send-to-Claude actions**: Annotation panel header now has `>Term` and `>VSC` buttons next to `Copy` and `Clear`, sending the annotation prompt directly to a terminal or to Claude Code without copy-paste.
+- **Hamburger menu reorganized**: Now contains 4 grouped sections — page actions (Reload, Annotation Mode), URL actions (Copy URL, Present), `Open *` group (Terminal, Claude Code, External Browser, Current Editor File, Home), and Live Inspect toggles. Toolbar buttons are duplicated in the menu for accessibility (except `←` `→` navigation).
+
+### Changed
+- **CSP stripped on proxied HTML responses**: The reverse proxy now strips `content-security-policy` and `content-security-policy-report-only` headers from upstream HTML responses. Required for inline annotation/bridge scripts to run on apps with strict CSP (e.g. Streamlit). Only affects HTML through `/__proxy__/PORT/`.
+
+### Technical
+- New `src/bridge-panel.ts` exporting `injectBridgePanel(html)` and `BRIDGE_PANEL_HTML_PROXY` (mirrors `annotation-client.ts` pattern). Uses distinct id prefix `aimax-bridge-px-` to avoid collisions with skill-injected bridges.
+- `src/extension.ts:45-` — extracted `/__claude` core logic into reusable `handleClaudeBridge(mode, prompt, callback)` helper, called by both the HTTP endpoint and the toolbar bridge dropdown.
+- Toolbar Bridge dropdown communicates with the extension host via `vscode.postMessage({ command: 'claudeBridge', mode, prompt })`; the result is delivered back via `panel.webview.postMessage({ command: 'bridgeResult', ... })`.
+- Toggle items in the hamburger menu persist their state in workspace `settings.json` via `vscode.workspace.getConfiguration().update(..., ConfigurationTarget.Workspace)`.
+
+---
+
 ## [0.1.29] - 2026-05-09
 
 ### Fixed
