@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Claude Bridge Demo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --blue: #004BFF;
+    --sky: #35C2FF;
+    --yellow: #F9C927;
+    --green: #00D35D;
+    --red: #FF4C53;
+    --orange: #FF7A20;
+    --pink: #FF9DCB;
+    --lilla: #6E87FF;
+    --black: #000000;
+    --white: #FFFFFF;
+    --dim: #666666;
+    --dark-gray: #999999;
+    --light-gray: #F2F2F2;
+    --font-body: 'Inter', 'Helvetica Neue', Arial, sans-serif;
+    --font-head: 'Inter', 'Helvetica Neue', Arial, sans-serif;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: var(--black); color: var(--white); font-family: var(--font-body); font-weight: 400; padding: 40px; min-height: 100vh; }
+  h1, h2, h3 { font-family: var(--font-head); font-weight: 700; }
+  h1 { font-size: 28px; margin-bottom: 8px; color: var(--white); }
+  .subtitle { color: var(--dark-gray); font-size: 14px; margin-bottom: 32px; }
+  .card { background: #111; border: 1px solid #222; border-radius: 12px; padding: 24px; margin-bottom: 20px; }
+  .card h2 { font-size: 18px; margin-bottom: 12px; color: var(--white); }
+  .card p { font-size: 14px; color: var(--dark-gray); line-height: 1.6; margin-bottom: 12px; }
+  .mode-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-bottom: 32px; }
+  .mode-card { background: #111; border: 1px solid #222; border-radius: 12px; padding: 20px; }
+  .mode-card h3 { font-size: 15px; margin-bottom: 8px; color: var(--white); }
+  .mode-card .badge { display: inline-block; padding: 3px 10px; border-radius: 4px; font-size: 11px; font-weight: 700; margin-bottom: 10px; text-transform: uppercase; letter-spacing: 0.5px; }
+  .badge-blue { background: var(--blue); color: var(--white); }
+  .badge-green { background: var(--green); color: var(--black); }
+  .badge-yellow { background: var(--yellow); color: var(--black); }
+  .badge-purple { background: var(--lilla); color: var(--white); }
+  .mode-card p { font-size: 13px; color: var(--dim); line-height: 1.5; }
+  .demo-section { margin-top: 32px; }
+  .demo-section h2 { font-size: 20px; margin-bottom: 16px; }
+  textarea { width: 100%; height: 100px; background: #0a0a0a; color: var(--white); border: 1px solid #333; border-radius: 8px; padding: 12px; font-size: 14px; resize: vertical; font-family: var(--font-body); }
+  textarea:focus { outline: none; border-color: var(--blue); }
+  .btn-row { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+  .btn { border: none; border-radius: 8px; padding: 10px 20px; cursor: pointer; font-size: 13px; font-weight: 600; font-family: var(--font-body); transition: opacity .15s, transform .1s; }
+  .btn:hover { opacity: 0.85; transform: translateY(-1px); }
+  .btn:active { transform: translateY(0); }
+  .btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+  .btn-terminal { background: var(--blue); color: var(--white); }
+  .btn-vscode { background: var(--green); color: var(--black); }
+  .btn-print { background: var(--yellow); color: var(--black); }
+  .btn-copy { background: var(--lilla); color: var(--white); }
+  #status { margin-top: 10px; font-size: 13px; color: var(--dim); min-height: 20px; }
+  #response-area { display: none; margin-top: 16px; background: #0a0a0a; border: 1px solid #333; border-radius: 8px; padding: 16px; font-size: 14px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; max-height: 400px; overflow-y: auto; color: var(--white); }
+  .log { margin-top: 32px; }
+  .log h2 { font-size: 16px; margin-bottom: 8px; color: var(--white); }
+  #log-entries { background: #0a0a0a; border: 1px solid #222; border-radius: 8px; padding: 12px; font-family: 'SF Mono', Monaco, 'Courier New', monospace; font-size: 12px; max-height: 200px; overflow-y: auto; color: var(--dark-gray); }
+  #log-entries:empty::before { content: 'No requests yet...'; color: var(--dim); }
+  .log-entry { padding: 4px 0; border-bottom: 1px solid #1a1a1a; }
+  .log-entry:last-child { border-bottom: none; }
+</style>
+</head>
+<body>
+
+<h1>Claude Bridge Demo</h1>
+<p class="subtitle">Test all 4 modes of the /__claude API endpoint</p>
+
+<div class="mode-grid">
+  <div class="mode-card">
+    <span class="badge badge-blue">terminal</span>
+    <h3>Terminal Mode</h3>
+    <p>Opens an interactive Claude session in the VS Code terminal with your prompt pre-filled. Claude runs interactively — you can continue the conversation.</p>
+  </div>
+  <div class="mode-card">
+    <span class="badge badge-green">vscode</span>
+    <h3>VS Code Mode</h3>
+    <p>Opens the Claude Code extension panel and starts a new conversation. Use this to work with Claude in the GUI.</p>
+  </div>
+  <div class="mode-card">
+    <span class="badge badge-yellow">print</span>
+    <h3>Print Mode</h3>
+    <p>Sends the prompt to Claude CLI and returns the response as JSON. The answer appears inline below — no context switch needed.</p>
+  </div>
+  <div class="mode-card">
+    <span class="badge badge-purple">copy</span>
+    <h3>Copy Mode</h3>
+    <p>Copies the prompt to your clipboard. Simple utility for when you want to paste it elsewhere.</p>
+  </div>
+</div>
+
+<div class="demo-section">
+  <div class="card">
+    <h2>Try it</h2>
+    <p>Write a prompt and choose how to send it to Claude.</p>
+    <textarea id="prompt" placeholder="Demo main panel — type here">Hello world! Tell me a fun fact.</textarea>
+    <div class="btn-row">
+      <button class="btn btn-copy" onclick="copyPrompt()">Copy</button>
+      <button class="btn btn-terminal" onclick="copyAndSend('terminal')">Copy &amp; Terminal</button>
+      <button class="btn btn-vscode" onclick="copyAndSend('vscode')">Copy &amp; VS Code</button>
+      <button class="btn btn-print" onclick="sendToClaude('print')">Ask Inline</button>
+    </div>
+    <div id="status"></div>
+    <div id="response-area"></div>
+  </div>
+</div>
+
+<div class="log">
+  <h2>Request Log</h2>
+  <div id="log-entries"></div>
+</div>
+
+<!-- AIMax Claude Bridge Panel (floating) -->
+<div id="aimax-bridge" style="position:fixed;bottom:20px;right:20px;z-index:99999;font-family:'Inter','Helvetica Neue',Arial,sans-serif;">
+  <div id="aimax-bridge-panel" style="display:none;width:340px;background:#111;border:1px solid #222;border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,0.6);padding:16px;margin-bottom:8px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+      <span style="color:#fff;font-weight:600;font-size:14px;">Claude Bridge</span>
+      <button onclick="document.getElementById('aimax-bridge-panel').style.display='none'" style="background:none;border:none;color:#666;cursor:pointer;font-size:18px;padding:0;line-height:1;">&times;</button>
+    </div>
+    <textarea id="aimax-bridge-prompt" placeholder="Hello I'm floating" style="width:100%;height:80px;background:#0a0a0a;color:#fff;border:1px solid #333;border-radius:8px;padding:8px;font-size:13px;resize:vertical;box-sizing:border-box;font-family:inherit;"></textarea>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:8px;">
+      <button onclick="aimaxCopy()" style="background:#6E87FF;color:#fff;border:none;border-radius:6px;padding:8px;cursor:pointer;font-size:12px;font-weight:600;">Copy</button>
+      <button onclick="aimaxCopyAndBridge('terminal')" style="background:#004BFF;color:#fff;border:none;border-radius:6px;padding:8px;cursor:pointer;font-size:12px;font-weight:600;">Copy &amp; Terminal</button>
+      <button onclick="aimaxCopyAndBridge('vscode')" style="background:#00D35D;color:#000;border:none;border-radius:6px;padding:8px;cursor:pointer;font-size:12px;font-weight:600;">Copy &amp; VS Code</button>
+      <button onclick="aimaxBridge('print')" style="background:#F9C927;color:#000;border:none;border-radius:6px;padding:8px;cursor:pointer;font-size:12px;font-weight:600;">Ask Inline</button>
+    </div>
+    <div id="aimax-bridge-response" style="display:none;margin-top:10px;padding:10px;background:#0a0a0a;border-radius:8px;color:#fff;font-size:13px;max-height:200px;overflow-y:auto;white-space:pre-wrap;word-break:break-word;"></div>
+    <div id="aimax-bridge-status" style="margin-top:6px;font-size:11px;color:#666;text-align:center;"></div>
+  </div>
+  <button onclick="document.getElementById('aimax-bridge-panel').style.display=document.getElementById('aimax-bridge-panel').style.display==='none'?'block':'none'" style="width:48px;height:48px;border-radius:50%;background:#004BFF;color:#fff;border:none;cursor:pointer;font-size:22px;box-shadow:0 4px 16px rgba(0,75,255,0.3);display:flex;align-items:center;justify-content:center;margin-left:auto;">&#10042;</button>
+</div>
+
+<script>
+const status = document.getElementById('status');
+const responseArea = document.getElementById('response-area');
+const logEntries = document.getElementById('log-entries');
+
+function addLog(mode, ok, detail) {
+  const time = new Date().toLocaleTimeString();
+  const entry = document.createElement('div');
+  entry.className = 'log-entry';
+  const timeSpan = document.createElement('span');
+  timeSpan.style.color = '#666';
+  timeSpan.textContent = time + ' ';
+  const modeSpan = document.createElement('span');
+  modeSpan.style.color = ok ? '#00D35D' : '#FF4C53';
+  modeSpan.textContent = '[' + mode + '] ';
+  entry.appendChild(timeSpan);
+  entry.appendChild(modeSpan);
+  entry.appendChild(document.createTextNode(detail));
+  logEntries.prepend(entry);
+}
+
+async function sendToClaude(mode) {
+  const prompt = document.getElementById('prompt').value.trim();
+  if (!prompt) { status.textContent = 'Please enter a prompt.'; return; }
+  responseArea.style.display = 'none';
+  status.textContent = mode === 'print' ? 'Waiting for Claude...' : 'Sending...';
+  const fullPrompt = `Context: viewing ${window.location.pathname}\n\n${prompt}`;
+  try {
+    const res = await fetch('/__claude', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt: fullPrompt, mode })
+    });
+    const data = await res.json();
+    if (mode === 'print' && data.response) {
+      responseArea.textContent = data.response;
+      responseArea.style.display = 'block';
+      status.textContent = '';
+      addLog(mode, true, 'Response received (' + data.response.length + ' chars)');
+    } else if (data.ok) {
+      status.textContent = 'Sent to Claude (' + mode + ')!';
+      setTimeout(function() { status.textContent = ''; }, 2500);
+      addLog(mode, true, 'Prompt sent successfully');
+    } else {
+      status.textContent = 'Error: ' + (data.error || 'Unknown');
+      addLog(mode, false, data.error || 'Unknown error');
+    }
+  } catch (e) {
+    status.textContent = 'Connection error — is AIMax Viewer running?';
+    addLog(mode, false, 'Connection failed');
+  }
+}
+
+function safeCopy(text) {
+  return new Promise(function(resolve, reject) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(resolve).catch(function() {
+        fallbackCopy(text) ? resolve() : reject();
+      });
+    } else {
+      fallbackCopy(text) ? resolve() : reject();
+    }
+  });
+}
+
+function fallbackCopy(text) {
+  var ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.position = 'fixed';
+  ta.style.left = '-9999px';
+  ta.style.top = '-9999px';
+  document.body.appendChild(ta);
+  ta.focus();
+  ta.select();
+  var ok = false;
+  try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+  document.body.removeChild(ta);
+  return ok;
+}
+
+async function copyPrompt() {
+  var prompt = document.getElementById('prompt').value.trim();
+  if (!prompt) { status.textContent = 'Please enter a prompt.'; return; }
+  try {
+    await safeCopy(prompt);
+    status.textContent = 'Copied!';
+    setTimeout(function() { status.textContent = ''; }, 1500);
+    addLog('copy', true, 'Prompt copied to clipboard');
+  } catch (e) {
+    status.textContent = 'Copy failed';
+    addLog('copy', false, 'Clipboard access denied');
+  }
+}
+
+async function copyAndSend(mode) {
+  var prompt = document.getElementById('prompt').value.trim();
+  if (!prompt) { status.textContent = 'Please enter a prompt.'; return; }
+  try { await safeCopy(prompt); } catch (e) { /* continue anyway */ }
+  sendToClaude(mode);
+}
+
+// === Floating panel functions ===
+async function aimaxBridge(mode) {
+  const prompt = document.getElementById('aimax-bridge-prompt').value.trim();
+  if (!prompt) return;
+  const bStatus = document.getElementById('aimax-bridge-status');
+  const respBox = document.getElementById('aimax-bridge-response');
+  bStatus.textContent = mode === 'print' ? 'Waiting for Claude...' : 'Sent!';
+  respBox.style.display = 'none';
+  const fullPrompt = `Context: viewing ${window.location.pathname}\n\n${prompt}`;
+  try {
+    const res = await fetch('/__claude', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt: fullPrompt, mode })
+    });
+    const data = await res.json();
+    if (mode === 'print' && data.response) {
+      respBox.textContent = data.response;
+      respBox.style.display = 'block';
+      bStatus.textContent = '';
+    } else if (data.ok) {
+      bStatus.textContent = 'Sent to Claude!';
+      setTimeout(function() { bStatus.textContent = ''; }, 2000);
+    } else {
+      bStatus.textContent = 'Error: ' + (data.error || 'Unknown');
+    }
+  } catch (e) {
+    bStatus.textContent = 'Connection error — is AIMax Viewer running?';
+  }
+}
+
+async function aimaxCopyAndBridge(mode) {
+  var prompt = document.getElementById('aimax-bridge-prompt').value.trim();
+  if (!prompt) return;
+  try { await safeCopy(prompt); } catch (e) { /* continue anyway */ }
+  aimaxBridge(mode);
+}
+
+async function aimaxCopy() {
+  var prompt = document.getElementById('aimax-bridge-prompt').value.trim();
+  if (!prompt) return;
+  var bStatus = document.getElementById('aimax-bridge-status');
+  try {
+    await safeCopy(prompt);
+    bStatus.textContent = 'Copied!';
+    setTimeout(function() { bStatus.textContent = ''; }, 1500);
+  } catch (e) {
+    bStatus.textContent = 'Copy failed';
+  }
+}
+</script>
+</body>
+</html>

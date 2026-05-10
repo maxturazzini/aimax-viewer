@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI, MAX Viewer - Setup Required</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --blue: #004BFF;
+            --sky: #35C2FF;
+            --yellow: #F9C927;
+            --green: #00D35D;
+            --red: #FF4C53;
+            --orange: #FF7A20;
+            --pink: #FF9DCB;
+            --lilla: #6E87FF;
+            --black: #000000;
+            --white: #FFFFFF;
+            --dim: #666666;
+            --dark-gray: #999999;
+            --light-gray: #F2F2F2;
+            --font-body: 'Inter', 'Helvetica Neue', Arial, sans-serif;
+            --font-head: 'Inter', 'Helvetica Neue', Arial, sans-serif;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: var(--font-body);
+            font-weight: 400;
+            background: var(--white);
+            min-height: 100vh;
+            color: var(--black);
+            padding: 40px 20px;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        h1, h2, h3 { font-family: var(--font-head); font-weight: 700; }
+        h1 {
+            color: var(--blue);
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+        }
+        .subtitle {
+            color: var(--dark-gray);
+            font-size: 1.1rem;
+            margin-bottom: 40px;
+        }
+        .card {
+            background: var(--light-gray);
+            border: 1px solid #E5E5E5;
+            border-radius: 12px;
+            padding: 24px;
+            margin-bottom: 20px;
+        }
+        .card.warning {
+            border-color: var(--orange);
+            background: rgba(255,122,32,0.08);
+        }
+        .card h2 {
+            color: var(--blue);
+            font-size: 1.2rem;
+            margin-bottom: 12px;
+        }
+        .card.warning h2 {
+            color: var(--orange);
+        }
+        .card p {
+            line-height: 1.6;
+            color: var(--dim);
+        }
+        .card ul, .card ol {
+            margin-top: 12px;
+            padding-left: 20px;
+        }
+        .card li {
+            margin-bottom: 8px;
+            color: var(--dim);
+        }
+        .card li strong {
+            color: var(--black);
+        }
+        code {
+            background: rgba(0,75,255,0.1);
+            color: var(--blue);
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-family: 'SF Mono', Monaco, 'Courier New', monospace;
+            font-size: 0.9em;
+        }
+        pre {
+            background: #0a0a0a;
+            border: 1px solid #222;
+            border-radius: 8px;
+            padding: 16px;
+            overflow-x: auto;
+            margin-top: 12px;
+        }
+        pre code {
+            background: none;
+            padding: 0;
+            color: var(--light-gray);
+        }
+        .step-number {
+            display: inline-block;
+            width: 28px;
+            height: 28px;
+            background: var(--blue);
+            color: var(--white);
+            border-radius: 50%;
+            text-align: center;
+            line-height: 28px;
+            font-weight: 700;
+            margin-right: 10px;
+            flex-shrink: 0;
+        }
+        .step {
+            display: flex;
+            align-items: flex-start;
+            margin-bottom: 16px;
+        }
+        .step-content {
+            flex: 1;
+        }
+        .step-content h3 {
+            color: var(--black);
+            font-size: 1rem;
+            margin-bottom: 6px;
+        }
+        .step-content p {
+            color: var(--dim);
+            font-size: 0.95rem;
+        }
+        .footer {
+            margin-top: 60px;
+            text-align: center;
+            color: var(--dim);
+            font-size: 12px;
+        }
+        .footer a {
+            color: var(--blue);
+            text-decoration: none;
+        }
+        .footer a:hover {
+            text-decoration: underline;
+        }
+        .icon {
+            font-size: 48px;
+            margin-bottom: 16px;
+        }
+        .setup-btn {
+            display: inline-block;
+            margin-top: 18px;
+            background: var(--blue);
+            color: var(--white);
+            border: none;
+            border-radius: 8px;
+            padding: 12px 20px;
+            font-family: var(--font-body);
+            font-size: 0.95rem;
+            font-weight: 600;
+            cursor: pointer;
+            text-decoration: none;
+            transition: background 0.15s ease;
+        }
+        .setup-btn:hover {
+            background: #0039cc;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>AI, MAX Viewer</h1>
+        <p class="subtitle">Setup required for your workspace</p>
+
+        <div class="card warning">
+            <div class="icon">&#9888;</div>
+            <h2>Please setup an Artifact Folder</h2>
+            <p>AI, MAX Viewer looks for a <code>Artifacts/</code> folder in your workspace to display HTML artifacts. This folder was not found in the current workspace or any parent directory. Simply create it on explorer.</p>
+        </div>
+
+        <div class="card" style="border-color: var(--blue); background: rgba(0,75,255,0.06);">
+            <div class="icon" style="color: var(--blue);">&#127916;</div>
+            <h2>Feature Overview Presentation</h2>
+            <p>A slide deck (<code>aimax-viewer-presentation.html</code>) showcases AI, MAX Viewer's main features. Launch it in <strong>Presenting Mode</strong> to get a presenter view (current + next slide, speaker notes, audience window) in your external browser.</p>
+            <button id="launch-presentation-btn" class="setup-btn" type="button">&#9654; Launch Presentation (Presenting Mode)</button>
+            <script>
+                (function () {
+                    var btn = document.getElementById('launch-presentation-btn');
+                    if (!btn) return;
+                    var deckUrl = location.protocol + '//' + location.host + '/Artifacts/aimax-viewer-presentation.html';
+                    var presenterUrl = location.protocol + '//' + location.host + '/__presenter#' + deckUrl;
+                    btn.addEventListener('click', function () {
+                        // Try VS Code webview API (Home Panel mode)
+                        try {
+                            if (typeof acquireVsCodeApi === 'function') {
+                                if (!window.__aimaxVscode) window.__aimaxVscode = acquireVsCodeApi();
+                                window.__aimaxVscode.postMessage({ command: 'presentFile', url: deckUrl });
+                                return;
+                            }
+                        } catch (_) {}
+                        // Iframe inside Browser Panel — bubble up to parent webview
+                        try {
+                            if (window.parent && window.parent !== window) {
+                                window.parent.postMessage({ command: 'presentFile', url: deckUrl }, '*');
+                                return;
+                            }
+                        } catch (_) {}
+                        // Plain external browser — just navigate to the presenter URL
+                        window.open(presenterUrl, '_blank');
+                    });
+                })();
+            </script>
+        </div>
+
+        <div class="card">
+            <h2>Quick Setup</h2>
+            <p>Follow these steps to set up AI, MAX Viewer in your workspace:</p>
+
+            <div style="margin-top: 20px;">
+                <div class="step">
+                    <span class="step-number">1</span>
+                    <div class="step-content">
+                        <h3>Create the folder structure</h3>
+                        <p>In your workspace root, create the following folders:</p>
+                        <pre><code>mkdir -p Artifacts</code></pre>
+                    </div>
+                </div>
+
+                <div class="step">
+                    <span class="step-number">2</span>
+                    <div class="step-content">
+                        <h3>Create an index.html file</h3>
+                        <p>Create a home page for your artifacts dashboard:</p>
+                        <pre><code>Artifacts/index.html</code></pre>
+                    </div>
+                </div>
+
+                <div class="step">
+                    <span class="step-number">3</span>
+                    <div class="step-content">
+                        <h3>Reload VS Code window</h3>
+                        <p>Press <code>Cmd+Shift+P</code> and run "Developer: Reload Window" to restart the extension.</p>
+                    </div>
+                </div>
+            </div>
+
+            <button id="quick-setup-btn" class="setup-btn" type="button">&#9889; Run Quick Setup with Claude</button>
+            <script>
+                (function () {
+                    var btn = document.getElementById('quick-setup-btn');
+                    if (!btn) return;
+                    var prompt = "Please perform the AI, MAX Viewer quick setup in this workspace:\n\n" +
+                        "1. Create a folder named 'Artifacts' in the workspace root (mkdir -p Artifacts).\n" +
+                        "2. Create the file 'Artifacts/index.html' with a minimal AI, MAX-styled landing page (heading 'My Artifacts' and a short paragraph explaining that HTML artifacts placed in this folder will appear in the AI, MAX Viewer dropdown).\n" +
+                        "3. After the files are created, ask me to run 'Developer: Reload Window' in VS Code (Cmd+Shift+P) to activate the AI, MAX Viewer extension.";
+                    var claudeUri = 'vscode://anthropic.claude-code/open?prompt=' + encodeURIComponent(prompt);
+                    btn.addEventListener('click', function () {
+                        // 1) Home Panel — telefono diretto
+                        try {
+                            if (typeof acquireVsCodeApi === 'function') {
+                                if (!window.__aimaxVscode) window.__aimaxVscode = acquireVsCodeApi();
+                                window.__aimaxVscode.postMessage({ command: 'openExternal', url: claudeUri });
+                                return;
+                            }
+                        } catch (_) {}
+                        // 2) Browser Panel — bridge attraverso il parent webview
+                        try {
+                            if (window.parent && window.parent !== window) {
+                                window.parent.postMessage({ command: 'openExternal', url: claudeUri }, '*');
+                                return;
+                            }
+                        } catch (_) {}
+                        // 3) Browser esterno — naviga al vscode:// URI direttamente
+                        window.location.href = claudeUri;
+                    });
+                })();
+            </script>
+        </div>
+
+        <div class="card">
+            <h2>Example index.html</h2>
+            <p>Here's a minimal template you can use for your artifacts home page:</p>
+            <pre><code>&lt;!DOCTYPE html&gt;
+&lt;html lang="en"&gt;
+&lt;head&gt;
+    &lt;meta charset="UTF-8"&gt;
+    &lt;title&gt;My Artifacts&lt;/title&gt;
+    &lt;style&gt;
+        body {
+            font-family: 'Inter', sans-serif;
+            background: #000;
+            color: #fff;
+            padding: 40px;
+        }
+        h1 { color: #004BFF; }
+        a { color: #35C2FF; }
+    &lt;/style&gt;
+&lt;/head&gt;
+&lt;body&gt;
+    &lt;h1&gt;My Artifacts&lt;/h1&gt;
+    &lt;p&gt;Your HTML artifacts will appear in the dropdown above.&lt;/p&gt;
+&lt;/body&gt;
+&lt;/html&gt;</code></pre>
+        </div>
+
+        <div class="card">
+            <h2>How It Works</h2>
+            <ul>
+                <li><strong>Artifacts folder:</strong> Place your HTML files in <code>Artifacts/</code></li>
+                <li><strong>Auto-discovery:</strong> All HTML files are listed in the toolbar dropdown</li>
+                <li><strong>Sorted by date:</strong> Newest files appear first</li>
+                <li><strong>Home page:</strong> <code>index.html</code> is your dashboard landing page</li>
+            </ul>
+        </div>
+
+        <div class="card">
+            <h2>AI Agent Integration</h2>
+            <p>When AI agents (like Claude Code) create HTML artifacts, they can open them directly in the viewer:</p>
+            <pre><code>open "vscode://aimax.aimax-viewer/openBrowser?http://127.0.0.1:3124/Artifacts/my-artifact.html"</code></pre>
+            <p style="margin-top: 12px;">This opens the artifact inside VS Code with the full toolbar (reload, navigation, dropdown selector).</p>
+        </div>
+
+        <div class="card">
+            <h2>Claude Bridge Skill</h2>
+            <p>The <strong>aimax-bridge</strong> skill adds a floating panel to your HTML artifacts that lets you send prompts directly to Claude Code from the browser.</p>
+            <ul>
+                <li><strong>Copy</strong> &mdash; copies the prompt to clipboard</li>
+                <li><strong>Copy &amp; Terminal</strong> &mdash; copies and opens an interactive Claude session in VS Code terminal</li>
+                <li><strong>Copy &amp; VS Code</strong> &mdash; copies and opens the Claude Code extension panel</li>
+                <li><strong>Ask Inline</strong> &mdash; sends the prompt to <code>claude -p</code> and shows the response directly in the artifact</li>
+            </ul>
+            <h3 style="margin-top:16px;font-size:1rem;color:var(--black);">Installation (Plugin)</h3>
+            <p>From inside a Claude Code session, add the marketplace and install:</p>
+            <pre><code>/plugin marketplace add https://github.com/maxturazzini/aimax-viewer.git
+/plugin install aimax-bridge@aimax-viewer</code></pre>
+            <p style="margin-top:8px;color:var(--dim);">Or for local development/testing:</p>
+            <pre><code>claude --plugin-dir /path/to/aimax-viewer</code></pre>
+            <p style="margin-top:8px;color:var(--dim);">This registers the <code>aimax-bridge</code> skill and makes <code>/aimax-bridge</code> available.</p>
+            <h3 style="margin-top:16px;font-size:1rem;color:var(--black);">Installation (Manual)</h3>
+            <ol>
+                <li>Copy the <code>skills/aimax-bridge/</code> folder into your project's <code>.claude/skills/</code> directory (or symlink it)</li>
+                <li>In your HTML artifact, add the bridge snippet just before <code>&lt;/body&gt;</code> (see the <a href="claude-bridge-demo.html" style="color:var(--sky);">Bridge Demo</a> for a working example)</li>
+                <li>Serve the artifact through AI, MAX Viewer &mdash; the bridge uses the same HTTP server's <code>/__claude</code> endpoint</li>
+            </ol>
+            <p style="margin-top:12px;">Once installed, invoke from Claude Code with <code>/aimax-bridge</code> when creating a new artifact.</p>
+        </div>
+
+        <div class="footer">
+            AI, MAX Viewer - AI, MAX<br>
+            <a href="https://github.com/maxturazzini/aimax-viewer">GitHub</a> &middot;
+            <a href="https://maxturazzini.com/en">maxturazzini.com</a>
+        </div>
+    </div>
+</body>
+</html>

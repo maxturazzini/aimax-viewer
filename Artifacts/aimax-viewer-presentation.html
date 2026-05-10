@@ -1,0 +1,1423 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI, Max Viewer — Feature Overview (0.1.29)</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --blue: #004BFF;
+            --sky: #35C2FF;
+            --aqua: #00D4FF;
+            --yellow: #F9C927;
+            --green: #00D35D;
+            --red: #FF4C53;
+            --orange: #FF7A20;
+            --pink: #FF9DCB;
+            --lilla: #6E87FF;
+            --black: #000000;
+            --white: #FFFFFF;
+            --dim: #666666;
+            --dark-gray: #999999;
+            --light-gray: #F2F2F2;
+            --vsc-bg: #1e1e1e;
+            --vsc-panel: #252526;
+            --vsc-sidebar: #181a1f;
+            --vsc-line: #3c3c3c;
+            --vsc-text: #cccccc;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html {
+            scroll-snap-type: y mandatory;
+            overflow-y: scroll;
+            scroll-behavior: smooth;
+        }
+        body {
+            font-family: 'Inter', 'Helvetica Neue', Arial, sans-serif;
+            background: var(--black);
+            color: var(--white);
+        }
+        section {
+            scroll-snap-align: start;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 60px 40px;
+            position: relative;
+        }
+        .speaker-notes { display: none; }
+
+        .slide { max-width: 980px; width: 100%; }
+        .slide h1 { font-size: 3.5rem; font-weight: 800; line-height: 1.1; margin-bottom: 20px; }
+        .slide h2 { font-size: 2.2rem; font-weight: 700; margin-bottom: 16px; line-height: 1.2; }
+        .slide h3 { font-size: 1.3rem; font-weight: 600; margin-bottom: 12px; }
+        .slide p { font-size: 1.2rem; line-height: 1.7; color: #ccc; }
+        .slide .big-text { font-size: 1.5rem; line-height: 1.6; color: #bbb; }
+        .slide .lead { font-size: 1.15rem; color: #aaa; margin-bottom: 16px; }
+
+        .text-blue { color: var(--blue); }
+        .text-sky { color: var(--sky); }
+        .text-aqua { color: var(--aqua); }
+        .text-green { color: var(--green); }
+        .text-yellow { color: var(--yellow); }
+        .text-orange { color: var(--orange); }
+        .text-lilla { color: var(--lilla); }
+
+        .feature-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-top: 28px;
+        }
+        .feature-card {
+            background: #111;
+            border: 1px solid #222;
+            border-radius: 12px;
+            padding: 22px;
+        }
+        .feature-card .icon { font-size: 28px; margin-bottom: 10px; }
+        .feature-card h3 { color: var(--white); font-size: 1.05rem; margin-bottom: 6px; }
+        .feature-card p { font-size: 0.95rem; color: var(--dark-gray); line-height: 1.5; }
+
+        code {
+            background: rgba(0,212,255,0.12);
+            color: var(--aqua);
+            padding: 2px 8px;
+            border-radius: 5px;
+            font-family: 'JetBrains Mono', 'SF Mono', Monaco, monospace;
+            font-size: 0.85em;
+        }
+        pre {
+            background: #0a0a0a;
+            border: 1px solid #1a1a1a;
+            border-radius: 10px;
+            padding: 16px 20px;
+            overflow-x: auto;
+            margin-top: 14px;
+            font-size: 0.85rem;
+        }
+        pre code { background: none; padding: 0; color: var(--light-gray); font-size: 0.9rem; }
+
+        .slide ul, .slide ol { margin-top: 14px; padding-left: 0; list-style: none; }
+        .slide li {
+            font-size: 1.05rem;
+            line-height: 1.55;
+            color: #ccc;
+            margin-bottom: 10px;
+            padding-left: 24px;
+            position: relative;
+        }
+        .slide li::before {
+            content: '';
+            position: absolute;
+            left: 0; top: 9px;
+            width: 8px; height: 8px;
+            border-radius: 50%;
+            background: var(--blue);
+        }
+        .slide li strong { color: var(--white); }
+
+        .badge {
+            display: inline-block;
+            background: var(--blue);
+            color: #fff;
+            font-size: 0.7rem;
+            font-weight: 700;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            padding: 5px 14px;
+            border-radius: 20px;
+            margin-bottom: 16px;
+        }
+        .badge.ok    { background: var(--green); }
+        .badge.new   { background: var(--orange); }
+        .badge.skill { background: var(--lilla); }
+
+        .divider { width: 60px; height: 4px; background: var(--blue); border-radius: 2px; margin: 20px 0; }
+        .slide-num { position: absolute; bottom: 16px; right: 24px; font-size: 11px; color: #333; font-weight: 600; }
+
+        section.title-slide { background: linear-gradient(135deg, #000 0%, #0a0a2a 100%); }
+        section.title-slide h1 {
+            font-size: 4.5rem;
+            background: linear-gradient(135deg, var(--blue), var(--sky));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        section.title-slide .tagline { font-size: 1.5rem; color: #888; margin-top: 12px; }
+        section.title-slide .version-line { font-size: 0.95rem; color: #555; margin-top: 28px; letter-spacing: 1px; }
+
+        section.end-slide { background: linear-gradient(135deg, #000 0%, #0a0a2a 100%); text-align: center; }
+        section.end-slide .slide { text-align: center; }
+        section.end-slide a { color: var(--sky); text-decoration: none; font-size: 1.05rem; }
+        section.end-slide a:hover { text-decoration: underline; }
+
+        .highlight-box {
+            background: rgba(0,75,255,0.08);
+            border-left: 4px solid var(--blue);
+            border-radius: 0 10px 10px 0;
+            padding: 16px 22px;
+            margin-top: 18px;
+        }
+        .highlight-box p { font-size: 1.05rem; color: #ccc; }
+
+        .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; margin-top: 20px; }
+        .three-col { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; margin-top: 20px; }
+
+        /* ===== Mockup primitives (mimicking VS Code chrome) ===== */
+        .mockup {
+            background: var(--vsc-bg);
+            border: 1px solid var(--vsc-line);
+            border-radius: 10px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+            overflow: hidden;
+            font-family: 'Inter', sans-serif;
+            color: var(--vsc-text);
+            font-size: 0.85rem;
+        }
+        .mockup .titlebar {
+            background: linear-gradient(90deg, #1a1a2e 0%, #16213e 100%);
+            padding: 8px 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            border-bottom: 2px solid var(--aqua);
+            font-size: 11px;
+        }
+        .mockup .titlebar .nav-btn {
+            background: transparent;
+            border: 1px solid #555;
+            color: #888;
+            padding: 1px 7px;
+            border-radius: 4px;
+            font-size: 11px;
+        }
+        .mockup .titlebar .url {
+            background: #111;
+            color: #888;
+            padding: 4px 10px;
+            border-radius: 4px;
+            flex: 1;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 10px;
+        }
+        .mockup .titlebar .icon-btn {
+            background: transparent;
+            border: 1px solid #444;
+            color: var(--aqua);
+            padding: 4px 8px;
+            border-radius: 4px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 26px;
+        }
+        .mockup .body {
+            padding: 16px;
+            background: #14141a;
+            min-height: 80px;
+        }
+        .mockup .menu-list {
+            background: var(--vsc-panel);
+            border: 1px solid var(--vsc-line);
+            border-radius: 8px;
+            padding: 6px 0;
+            min-width: 280px;
+            font-size: 12px;
+        }
+        .mockup .menu-item {
+            padding: 7px 16px;
+            color: var(--vsc-text);
+            cursor: default;
+        }
+        .mockup .menu-item.disabled { opacity: 0.4; }
+        .mockup .menu-item.divider {
+            border-top: 1px solid var(--vsc-line);
+            padding: 0;
+            margin: 4px 0;
+        }
+        .mockup .annot-window {
+            background: var(--vsc-bg);
+            border: 1px solid var(--aqua);
+            border-radius: 8px;
+            padding: 10px 14px;
+        }
+        .mockup .annot-header {
+            display: flex;
+            gap: 6px;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+        .mockup .annot-header strong { color: var(--aqua); flex: 1; font-size: 12px; }
+        .mockup .icon-btn-row {
+            display: inline-flex;
+            border: 1px solid #444;
+            color: var(--aqua);
+            background: transparent;
+            padding: 3px 6px;
+            border-radius: 4px;
+            font-size: 10px;
+            min-width: 22px;
+            justify-content: center;
+        }
+        .mockup .row {
+            font-size: 11px;
+            color: #aaa;
+            padding: 4px 0;
+            border-bottom: 1px solid #232330;
+            display: flex;
+            gap: 8px;
+        }
+        .mockup .row .num {
+            background: var(--aqua);
+            color: #001018;
+            font-weight: 700;
+            font-size: 9px;
+            width: 16px; height: 16px;
+            border-radius: 50%;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+        .mockup .sidebar {
+            background: var(--vsc-sidebar);
+            padding: 10px 14px;
+            font-size: 11px;
+        }
+        .mockup .sidebar .group {
+            color: #888;
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 6px;
+        }
+        .mockup .sidebar .item {
+            padding: 4px 0;
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            color: var(--vsc-text);
+        }
+        .mockup .sidebar .item .dot {
+            width: 9px; height: 9px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+        .mockup .sidebar .item .dot.run    { background: var(--green); }
+        .mockup .sidebar .item .dot.stop   { background: var(--red); }
+        .mockup .sidebar .item .dot.cloud  { background: transparent; border: 1px solid var(--sky); }
+        .mockup .sidebar .item .name { flex: 1; }
+        .mockup .sidebar .item .meta { color: #555; font-size: 10px; }
+
+        /* Live working bridge embedded inside slide 9 */
+        .live-bridge {
+            background: #1e1e2e;
+            border: 1px solid #444;
+            border-radius: 12px;
+            padding: 14px;
+            font-family: 'Inter', sans-serif;
+        }
+        .live-bridge .lb-title {
+            color: #cdd6f4;
+            font-weight: 600;
+            font-size: 0.95rem;
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .live-bridge .lb-title .pulse {
+            width: 8px; height: 8px;
+            background: var(--green);
+            border-radius: 50%;
+            box-shadow: 0 0 8px var(--green);
+            animation: pulse 1.5s ease-in-out infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
+        }
+        .live-bridge textarea {
+            width: 100%;
+            height: 78px;
+            background: #181825;
+            color: #cdd6f4;
+            border: 1px solid #555;
+            border-radius: 8px;
+            padding: 8px 10px;
+            font-size: 0.9rem;
+            resize: vertical;
+            box-sizing: border-box;
+            font-family: inherit;
+        }
+        .live-bridge .lb-edits {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin-top: 8px;
+            font-size: 0.75rem;
+            color: #cdd6f4;
+            cursor: pointer;
+        }
+        .live-bridge .lb-edits input { accent-color: var(--aqua); }
+        .live-bridge .lb-actions {
+            display: flex;
+            gap: 6px;
+            margin-top: 8px;
+            flex-wrap: wrap;
+        }
+        .live-bridge .lb-btn {
+            background: transparent;
+            border: 1px solid #444;
+            color: var(--aqua);
+            padding: 6px 10px;
+            border-radius: 6px;
+            font-size: 0.8rem;
+            cursor: pointer;
+            font-family: inherit;
+            font-weight: 600;
+        }
+        .live-bridge .lb-btn:hover {
+            background: #2a2a3e;
+            border-color: var(--aqua);
+        }
+        .live-bridge .lb-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+        .live-bridge .lb-status {
+            margin-top: 8px;
+            font-size: 0.75rem;
+            color: #888;
+            text-align: center;
+            min-height: 14px;
+        }
+        .live-bridge .lb-response {
+            display: none;
+            margin-top: 8px;
+            padding: 10px 12px;
+            background: #181825;
+            border: 1px solid #333;
+            border-radius: 8px;
+            color: #cdd6f4;
+            font-size: 0.8rem;
+            max-height: 200px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-break: break-word;
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        /* Interactive CTA (e.g. Copy code to inject) */
+        .cta {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            background: linear-gradient(135deg, var(--orange), var(--yellow));
+            color: #1e1e2e;
+            padding: 13px 24px;
+            border-radius: 12px;
+            border: none;
+            cursor: pointer;
+            font-size: 1rem;
+            font-weight: 700;
+            letter-spacing: 0.3px;
+            box-shadow: 0 6px 24px rgba(255,122,32,0.35);
+            margin-top: 16px;
+            transition: transform 0.15s, box-shadow 0.15s, background 0.3s;
+            font-family: inherit;
+        }
+        .cta:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 32px rgba(255,122,32,0.5);
+        }
+        .cta.copied {
+            background: linear-gradient(135deg, var(--green), var(--sky));
+            color: #001018;
+        }
+        .cta-row {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            flex-wrap: wrap;
+            margin-top: 14px;
+        }
+        .cta-hint {
+            font-size: 0.85rem;
+            color: #777;
+            font-style: italic;
+        }
+
+        /* Real screenshot styling */
+        .shot {
+            display: block;
+            max-width: 100%;
+            height: auto;
+            border-radius: 10px;
+            border: 1px solid #333;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.55);
+            margin-top: 16px;
+        }
+        .shot.thin { box-shadow: 0 4px 16px rgba(0,0,0,0.5); }
+        .shot-pair {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 14px;
+            margin-top: 16px;
+        }
+        .shot-pair .shot { margin-top: 0; }
+        .shot-caption {
+            font-size: 0.8rem;
+            color: #777;
+            text-align: center;
+            margin-top: 6px;
+            font-style: italic;
+        }
+
+        /* TODO-screenshot placeholder */
+        .screenshot-placeholder {
+            background: repeating-linear-gradient(45deg, #1a1a1a, #1a1a1a 12px, #111 12px, #111 24px);
+            border: 1px dashed #444;
+            border-radius: 8px;
+            padding: 50px 20px;
+            text-align: center;
+            color: #555;
+            font-size: 0.9rem;
+            font-style: italic;
+            margin-top: 16px;
+        }
+
+        /* Inline keyboard hint */
+        kbd {
+            display: inline-block;
+            background: #222;
+            border: 1px solid #444;
+            border-radius: 4px;
+            padding: 2px 6px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.8em;
+            color: var(--white);
+        }
+    </style>
+</head>
+<body>
+
+    <!-- ====================================================== -->
+    <!-- Slide 1 — Title                                         -->
+    <!-- ====================================================== -->
+    <section class="title-slide">
+        <div class="slide">
+            <span class="badge">VS CODE EXTENSION</span>
+            <h1>AI, Max Viewer</h1>
+            <p class="tagline">An in-editor agentic helper for HTML &amp; Markdown artifacts</p>
+            <p class="version-line">v0.1.29 — Apps Manager, Live Annotation, Claude Bridge unified, Presenter agentic, two skills</p>
+        </div>
+        <div class="speaker-notes">Welcome!
+AI, Max Viewer is a VS Code extension that lets you view HTML and Markdown artifacts without leaving the editor.
+Built specifically for AI-powered workflows.
+(Note. Use emphasis when talking :-) )
+</div>
+        <div class="slide-num">1 / 15</div>
+    </section>
+
+    <!-- ====================================================== -->
+    <!-- Slide 2 — Problem                                       -->
+    <!-- ====================================================== -->
+    <section>
+        <div class="slide">
+            <span class="badge">THE PROBLEM</span>
+            <h2>Context switching kills <span class="text-orange">productivity</span></h2>
+            <p class="big-text">
+                Generating an artifact with an AI agent is fast.
+                <strong style="color:#fff">Iterating on it</strong> — opening a browser tab,
+                copying a URL, switching back to type a fix, pasting feedback — is slow.
+            </p>
+            <div class="highlight-box">
+                <p>Every artifact you ship goes through dozens of micro-loops. If each
+                loop costs a context switch, you stop shipping or you stop iterating.
+                Neither is good.</p>
+            </div>
+        </div>
+        <div class="speaker-notes">
+            The core problem AI, Max Viewer solves is the cost of the iteration loop.
+            With AI agents like Claude Code, the *creation* step is fast — you ask, you
+            get an HTML report, a dashboard, a slide deck, a markdown plan. But the
+            *iteration* step is brutal: you switch to a browser, scroll to find the bit
+            that's wrong, copy a URL, switch back to VS Code, type "make this title
+            bigger", paste the URL, re-send. Multiply that by twenty per artifact. The
+            extension's bet is that if you can stay inside VS Code — view, annotate,
+            send-to-Claude, edit, refresh — you do twenty iterations in the time you
+            used to do five. The rest of this deck is about the surfaces that make
+            that loop possible.
+        </div>
+        <div class="slide-num">2 / 15</div>
+    </section>
+
+    <!-- ====================================================== -->
+    <!-- Slide 3 — Four pillars overview                          -->
+    <!-- ====================================================== -->
+    <section>
+        <div class="slide">
+            <span class="badge">SOLUTION</span>
+            <h2>Four pillars: <span class="text-blue">View</span>, <span class="text-green">Drive Apps</span>, <span class="text-sky">Bridge to Claude</span>, <span class="text-yellow">Present</span></h2>
+            <div class="feature-grid">
+                <div class="feature-card">
+                    <div class="icon">📄</div>
+                    <h3 class="text-blue">View &amp; Annotate</h3>
+                    <p>Browser + Home + Recents panels. Annotation mode turns hover-and-click into structured AI prompts — extends across cross-port localhost via Live Annotation.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="icon">⚡</div>
+                    <h3 class="text-green">Drive dev apps</h3>
+                    <p>Apps Manager runs / stops / inspects local <em>and</em> remote dev apps with HTTP healthchecks and a right-click menu.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="icon">✻</div>
+                    <h3 class="text-sky">Bridge to Claude</h3>
+                    <p>Toolbar dropdown, persistent injection, HTTP API. One unified way to talk to Claude from any artifact or app.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="icon">🎤</div>
+                    <h3 class="text-yellow">Present &amp; Skills</h3>
+                    <p>Presenter mode with carousel + Agentic Save Notes. Two installable skills (`bridge`, `make-presentable`).</p>
+                </div>
+            </div>
+        </div>
+        <div class="speaker-notes">
+            Four pillars, picked because they correspond to four different verbs the
+            user does inside the extension. **View** is passive — read the artifact,
+            navigate, find. **Drive** is active — start a Vite app, restart it, click
+            to open in the viewer. **Bridge** is conversational — describe a change and
+            have Claude execute it. **Present** is performative — turn the artifact
+            into something you can show in a meeting. Each pillar exists because the
+            previous one wasn't enough on its own. We started with View. Then we added
+            Bridge so views could talk back to the agent. Then Drive Apps so dev
+            servers could play in the same sandbox. Then Present + skills so the same
+            content surface could be reused across creation, review, and delivery.
+            The next 10 slides take each pillar apart.
+        </div>
+        <div class="slide-num">3 / 15</div>
+    </section>
+
+    <!-- ====================================================== -->
+    <!-- Slide 4 — Pillar 1a: Browser panel                       -->
+    <!-- ====================================================== -->
+    <section>
+        <div class="slide">
+            <span class="badge">PILLAR 1 · VIEW</span>
+            <h2>Browser panel — <span class="text-blue">tabs, dropdown, sidebar</span></h2>
+            <ul>
+                <li><strong>Multi-tab by default</strong> — every artifact opens in its own panel, deduplicated by URL.</li>
+                <li><strong>Toolbar with dropdown</strong> for quick navigation between configured Artifacts folders.</li>
+                <li><strong>Sidebar TreeView</strong> with sort toggle (alpha ⇄ last-modified) and right-click context menu (Open in Viewer / External / Editor / Present).</li>
+                <li><strong>Recents panel</strong> remembers what you opened last and lets you jump back instantly.</li>
+                <li><strong>Multi-folder</strong> — point AIMax at any combination of <code>Artifacts/</code>, <code>reports/</code>, <code>decks/</code> via <code>aimaxViewer.browser.folders</code>.</li>
+            </ul>
+            <img class="shot thin" src="_assets/presentation/aimax-toolbar.png" alt="AIMax Browser toolbar with all icon buttons">
+            <p class="shot-caption">←/→/↻ · URL · ⓘ info · 💬 annotate · ✻ Bridge · &gt;_ terminal · ★ Claude Code · ☰ menu</p>
+        </div>
+        <div class="speaker-notes">
+            The Browser panel is the workhorse. It opens any HTML or Markdown file
+            served by the local AIMax HTTP server in a webview iframe with a custom
+            toolbar. The toolbar gives you back/forward, reload, an info bubble that
+            shows YAML frontmatter, the annotation toggle, the Claude Bridge button,
+            a one-click terminal, a one-click Claude Code conversation, and the
+            hamburger menu — all in azure on dark, all keyboard reachable. The
+            sidebar TreeView is the second discovery surface: every configured folder
+            shows up as a tree, sortable alphabetically or by modification date — the
+            latter being how you find "the report I generated five minutes ago".
+            Recents complements that with an MRU list. Multi-folder support means you
+            don't have to mash all your artifacts into one folder; point AIMax at three
+            different folders and they all coexist in the dropdown and TreeView.
+        </div>
+        <div class="slide-num">4 / 15</div>
+    </section>
+
+    <!-- ====================================================== -->
+    <!-- Slide 5 — Pillar 1b: Annotation Mode                     -->
+    <!-- ====================================================== -->
+    <section>
+        <div class="slide">
+            <span class="badge">PILLAR 1 · ANNOTATE</span>
+            <h2>Annotation mode = a <span class="text-blue">structured AI feedback channel</span></h2>
+            <ol>
+                <li>Click the <strong>chat-bubble icon</strong> in the toolbar. Hover any element to see tag, dimensions, color, font.</li>
+                <li>Click an element to attach a <strong>free-form comment</strong>. Multiple annotations get numbered badges in-page.</li>
+                <li>Send the lot in one shot via the panel header buttons:</li>
+            </ol>
+            <img class="shot" src="_assets/presentation/aimax-annotation-panel.png" alt="Annotation panel with three annotated requests" style="max-width:780px; margin-left:auto; margin-right:auto;">
+            <p class="lead" style="margin-top:14px;">
+                <strong style="color:#fff">Copy</strong> &middot;
+                <strong style="color:#fff">&gt;Term</strong> (open terminal with <code>claude "&hellip;"</code>) &middot;
+                <strong style="color:#fff">&gt;VSC</strong> (open Claude Code panel pre-filled) &middot;
+                <strong style="color:#fff">&gt;Run</strong> (run inline as agent, response below) &middot;
+                <strong style="color:#fff">Refresh</strong>
+            </p>
+        </div>
+        <div class="speaker-notes">
+            Annotation mode is where the agentic loop becomes natural. Without it, you
+            describe a change in plain English ("the title needs to be bigger and the
+            colour wrong"). With it, you click the actual element, type a one-line
+            instruction, and the extension produces a structured prompt that includes
+            the CSS selector, tag, current dimensions, current colour and font. Claude
+            then knows exactly which DOM node you mean. The four send-buttons map to
+            four execution styles: Copy puts the prompt in the clipboard for ad-hoc
+            use. ">Term" opens a fresh terminal with `claude "..."` typed in, perfect
+            if you want to keep an interactive session open. ">VSC" opens a Claude
+            Code conversation panel pre-filled. ">Run" actually executes the agent
+            inline — five-minute budget, edits enabled — and renders the response in a
+            box right under the annotation list. The same panel is mirrored on the
+            Home view, so the workflow works on landing pages too.
+        </div>
+        <div class="slide-num">5 / 15</div>
+    </section>
+
+    <!-- ====================================================== -->
+    <!-- Slide 6 — Pillar 1c: Live Annotation across ports         -->
+    <!-- ====================================================== -->
+    <section>
+        <div class="slide">
+            <span class="badge">PILLAR 1 · LIVE ANNOTATION</span>
+            <h2>Annotate any <span class="text-blue">localhost dev app</span></h2>
+            <p class="lead">A single setting — <code>aimaxViewer.liveInspect.enabled</code> (on by default) — routes cross-port URLs through the AIMax reverse proxy and injects the annotation client. Same UI as the previous slide, now extended to your whole local stack.</p>
+            <div class="two-col">
+                <div>
+                    <h3 class="text-aqua">What it enables</h3>
+                    <ul>
+                        <li>Annotate Vite, Streamlit, FastAPI, Next.js — anything serving on a localhost port</li>
+                        <li>Same Annotation Mode UI as for static artifacts</li>
+                        <li>CSP stripped on proxied HTML responses (so apps with strict CSP still get the annotation injection)</li>
+                    </ul>
+                </div>
+                <div>
+                    <h3 class="text-aqua">How it works</h3>
+                    <pre><code>http://localhost:5173/page
+        ↓ (proxy rewrite)
+http://127.0.0.1:3125/__proxy__/5173/page
+        ↓ (inject annotation client)
+&lt;script&gt; AIMax annotation client &lt;/script&gt;</code></pre>
+                </div>
+            </div>
+            <div class="highlight-box" style="margin-top:18px;">
+                <p>If a particular app conflicts with the proxy injection, opt it out per-host with <code>aimaxViewer.liveInspect.skipHosts</code>.</p>
+            </div>
+        </div>
+        <div class="speaker-notes">
+            Live Annotation is what lets the annotation flow from the previous slide
+            extend to anything you run locally. Without it, annotation only worked on
+            files served by AIMax itself — Markdown, HTML, generated reports. With it
+            on, AIMax becomes a transparent reverse proxy: any cross-port localhost URL
+            gets routed through `127.0.0.1:<aimax-port>/__proxy__/<target-port>/path`,
+            and on the way back, AIMax strips strict CSP headers and injects the
+            annotation client into the HTML response. So you open your Vite app, click
+            "annotate", point at a button, type "this should redirect to /pricing",
+            and the structured prompt is back in your hands. The opt-out is `skipHosts`
+            for apps whose JavaScript fights with the injection — typically apps with
+            their own DOM observers or hot-reload schemes. The default-on stance is
+            deliberate: Live Annotation is the headline feature that makes "the rest
+            of your stack" annotatable, not just static deliverables. Naturally pairs
+            with the next slide — once you can annotate any dev app, you also want to
+            run / stop / inspect them from the same sidebar.
+        </div>
+        <div class="slide-num">6 / 15</div>
+    </section>
+
+    <!-- ====================================================== -->
+    <!-- Slide 7 — Pillar 2: Apps Manager v2                       -->
+    <!-- ====================================================== -->
+    <section>
+        <div class="slide">
+            <span class="badge new">NEW</span>
+            <span class="badge">PILLAR 2 · DRIVE</span>
+            <h2>Apps Manager v2 — <span class="text-green">local + remote dev apps in one place</span></h2>
+            <ul>
+                <li><strong>HTTP healthcheck</strong> against <code>healthUrl</code> — works for apps on <code>http://minimacs.local:5001/</code> and not just <code>localhost</code>.</li>
+                <li><strong>Burst-then-slow refresh</strong>: 3s tick for the first 30s after activation, then your normal interval.</li>
+                <li><strong>Right-click context menu</strong>: Open in Viewer / External / Start / Stop / Copy URL / Edit settings.json.</li>
+                <li><strong>Cloud icon</strong> for non-local hosts; optional <code>remote: true</code> field protects against accidental local-process kills.</li>
+            </ul>
+            <div class="shot-pair">
+                <div>
+                    <img class="shot" src="_assets/presentation/aimax-apps-manager.png" alt="Apps Manager sidebar with running, stopped and remote/cloud apps">
+                    <p class="shot-caption">Sidebar — local + remote, with running/stopped state</p>
+                </div>
+                <div>
+                    <img class="shot" src="_assets/presentation/aimax-apps-context-menu.png" alt="Right-click context menu on an app">
+                    <p class="shot-caption">Right-click menu — Open / Stop / Copy URL / Edit</p>
+                </div>
+            </div>
+        </div>
+        <div class="speaker-notes">
+            Apps Manager started simple — list local dev apps and toggle them. v2 turns
+            it into a real ops surface. The big change is HTTP healthcheck against the
+            configured `healthUrl`, which means apps on a different host (a homelab,
+            a remote VPS, the laptop next to yours running a model server) are
+            correctly detected as Running or Stopped. No more lying `lsof` on the
+            local machine. Burst-then-slow is a small but big-feel change: when you
+            just opened the panel or hit refresh, you want status RIGHT NOW. So we
+            tick every 3s for 30s, then settle to the user-configured interval (default
+            30s) so we don't burn file descriptors all session. The right-click menu
+            replaces an icon-only row with a discoverable set of actions per app.
+            Click on a stopped app now also tries to open it — if it's unreachable,
+            the iframe shows the connection error instead of failing silently. Combined
+            with the previous slide (Live Annotation), this means: spin up an app from
+            here, then annotate it through the proxy — both surfaces are AIMax.
+        </div>
+        <div class="slide-num">7 / 15</div>
+    </section>
+
+    <!-- ====================================================== -->
+    <!-- Slide 8 — Pillar 3a: Bridge in toolbar                   -->
+    <!-- ====================================================== -->
+    <section>
+        <div class="slide">
+            <span class="badge">PILLAR 3 · BRIDGE</span>
+            <h2>Claude Bridge in the <span class="text-aqua">Browser toolbar</span></h2>
+            <p class="lead">Always visible. Click <strong style="color:var(--aqua)">✻</strong> → dropdown opens with a textarea, four actions, and an explicit <em>Allow file edits</em> toggle.</p>
+            <div class="two-col">
+                <div>
+                    <ul>
+                        <li><strong>Copy</strong> — clipboard-only</li>
+                        <li><strong>Copy &amp; Terminal</strong> — open new terminal with <code>claude "&hellip;"</code></li>
+                        <li><strong>Copy &amp; VS Code</strong> — open Claude Code panel pre-filled</li>
+                        <li><strong>Ask Inline</strong> — run agent in headless mode, response in-panel</li>
+                    </ul>
+                </div>
+                <div>
+                    <h3 class="text-yellow">Allow file edits toggle</h3>
+                    <p style="font-size:1rem; color:#aaa;">
+                        <strong>Off (default):</strong> 60s budget, no tools, concise system prompt. Quick chat.<br><br>
+                        <strong>On:</strong> 5min budget, <code>--dangerously-skip-permissions</code>. Full agent, will modify files.
+                    </p>
+                </div>
+            </div>
+            <img class="shot" src="_assets/presentation/aimax-bridge-dropdown.png" alt="Claude Bridge dropdown with prompt, Allow file edits toggle and four icon-only action buttons" style="max-width:880px; margin-left:auto; margin-right:auto;">
+        </div>
+        <div class="speaker-notes">
+            The Bridge in the toolbar is the universal entry point. It lives in the
+            webview chrome, not in the page DOM, so it works on any URL — local
+            artifact, proxied dev app, external site — without touching anyone's HTML.
+            The dropdown gives you four execution targets that map to your mental
+            model: copy for ad-hoc use, terminal for an interactive session, VS Code
+            for a Claude Code panel, inline for a headless agent run that returns a
+            response in the dropdown. The Allow file edits toggle is a hard call we
+            spent time on. Off, the Bridge runs Claude with `--tools ""` and a concise
+            system prompt — 60-second budget, no file changes possible, returns in
+            seconds. On, it runs `--dangerously-skip-permissions` with a 5-minute
+            budget — full agent, can modify files. The toggle is unchecked by default
+            because "asking a question" is more common than "asking for a fix", but
+            the path to the latter is one click away. Status text reflects the mode.
+        </div>
+        <div class="slide-num">8 / 15</div>
+    </section>
+
+    <!-- ====================================================== -->
+    <!-- Slide 9 — Pillar 3b: Persistent injection (with live demo) -->
+    <!-- ====================================================== -->
+    <section>
+        <div class="slide" style="max-width:1100px;">
+            <span class="badge">PILLAR 3 · BRIDGE</span>
+            <h2>Add Bridge to <em>this</em> page — <span class="text-orange">persistently</span> (and try it now ↘)</h2>
+            <p class="lead">A menu item handles the whole injection. And — because this <em>is</em> an AIMax-served artifact — the right column below is a <strong style="color:var(--green)">live working Bridge</strong>: type something, hit a button, watch the response.</p>
+            <div class="two-col" style="grid-template-columns: 1.1fr 1fr; gap:24px; margin-top:14px;">
+                <div>
+                    <img class="shot thin" src="_assets/presentation/aimax-hamburger-menu.png" alt="Hamburger menu with 'Add Claude Bridge to this page (persistent)' highlighted" style="margin-top:0;">
+                    <p class="shot-caption">Menu ☰ — the highlighted item is the one that injects the snippet</p>
+                    <div class="cta-row">
+                        <button class="cta" id="copy-snippet-btn" onclick="copyBridgeSnippet()">📋 Copy code to inject</button>
+                        <span class="cta-hint">~95 lines · same template the skill uses</span>
+                    </div>
+                </div>
+                <div>
+                    <div class="live-bridge">
+                        <div class="lb-title"><span class="pulse"></span>Try it live (this is the real Bridge, not a mockup)</div>
+                        <textarea id="lb-prompt" placeholder="e.g. summarize what's on this slide in one sentence"></textarea>
+                        <label class="lb-edits"><input type="checkbox" id="lb-edits"> Allow file edits</label>
+                        <div class="lb-actions">
+                            <button class="lb-btn" onclick="lbAction('copy')">📋 Copy</button>
+                            <button class="lb-btn" onclick="lbAction('terminal')">📋&gt;_ Term</button>
+                            <button class="lb-btn" onclick="lbAction('vscode')">📋&lt;/&gt; VSC</button>
+                            <button class="lb-btn" onclick="lbAction('print')">✻ Inline</button>
+                        </div>
+                        <div class="lb-status" id="lb-status"></div>
+                        <div class="lb-response" id="lb-response"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="speaker-notes">
+            Two things on this slide. First, the menu item "Add Claude Bridge to this
+            page (persistent)" is the way to make the Bridge survive export — it asks
+            Claude Code to inject the canonical bridge snippet into the artifact's
+            source HTML before `</body>`. The "Copy code to inject" button on the left
+            does the same thing manually: it copies the *full* snippet to your
+            clipboard so you can paste it anywhere. The snippet is roughly 95 lines —
+            a fixed-position div containing a textarea, four colored buttons (Copy,
+            Copy &amp; Terminal, Copy &amp; VS Code, Ask Inline), a status line and a
+            response area, plus the JS that POSTs to `/__claude` with the prompt and
+            the chosen mode. It's the exact same code that the `aimax-bridge` skill
+            template ships, so what you copy here is what the skill installs.
+            Second — and more fun — the right column is a *real working* Bridge,
+            embedded directly into this slide. Because this deck is being served by
+            AIMax over HTTP, the bridge can fetch `/__claude` just like any other
+            artifact. So during the demo, you can type a prompt, click Inline, and
+            Claude actually answers. This is the proof of the slide's thesis:
+            artifacts and the agent run on the same fabric, and presentations can be
+            interactive — not just slides showing what the tool does, but the tool
+            itself running in the slide.
+        </div>
+        <div class="slide-num">9 / 15</div>
+    </section>
+
+    <!-- ====================================================== -->
+    <!-- Slide 10 — Pillar 3c: HTTP API + skill                   -->
+    <!-- ====================================================== -->
+    <section>
+        <div class="slide">
+            <span class="badge skill">SKILL</span>
+            <h2><code>aimax-bridge</code> skill + <code>/__claude</code> HTTP endpoint</h2>
+            <p class="lead">Underneath both the toolbar and the persistent injection, the same building blocks: an HTTP API exposed by AIMax and a skill that owns the canonical snippet.</p>
+            <div class="two-col">
+                <div>
+                    <h3 class="text-aqua">HTTP API</h3>
+<pre><code>POST /__claude
+Content-Type: application/json
+
+{
+  "prompt": "...",
+  "mode": "vscode",
+  "allowEdits": false
+}</code></pre>
+                    <p style="font-size:0.95rem; color:#aaa; margin-top:10px;">
+                        Modes: <code>terminal</code>, <code>vscode</code>, <code>print</code>, <code>copy</code>.<br>
+                        <code>print</code> respects <code>allowEdits</code> (60s chat / 5min agent).
+                    </p>
+                </div>
+                <div>
+                    <h3 class="text-lilla">Skill template</h3>
+                    <p style="font-size:0.95rem;">Two install paths — <code>skills/aimax-bridge/</code> (Claude Code skills dir) or <code>plugins/aimax-bridge/</code> (Claude plugins dir).</p>
+                    <p style="font-size:0.95rem; margin-top:10px;">Two templates:</p>
+                    <ul>
+                        <li><code>bridge-buttons.md</code> — floating action panel</li>
+                        <li><code>bridge-inline.md</code> — inline widget with prompt + response</li>
+                    </ul>
+                    <p style="font-size:0.95rem; margin-top:10px;">Invoke: <code>/aimax-bridge buttons</code> or <code>/aimax-bridge inline</code>.</p>
+                </div>
+            </div>
+        </div>
+        <div class="speaker-notes">
+            The Bridge's structural elegance is that all three surfaces — toolbar
+            dropdown, persistent injection, embedded skill widget — reuse the same
+            low-level primitive: the `/__claude` HTTP endpoint exposed by AIMax. That
+            endpoint accepts JSON with a prompt, a mode, and an `allowEdits` flag. Mode
+            `terminal` opens a terminal with claude "..." typed. Mode `vscode` opens
+            the Claude Code conversation panel pre-filled via the official URI handler.
+            Mode `print` runs Claude in non-interactive print mode and returns a JSON
+            response — chat by default (60s, no tools), full agent if `allowEdits` is
+            true (5min, dangerously-skip-permissions). The `aimax-bridge` skill owns
+            the canonical HTML snippet that talks to this endpoint; both the embedded
+            widget and the persistent-injection menu item ultimately install that
+            snippet. The skill ships in two folders — `skills/` for Claude Code's
+            skills directory, `plugins/` for the plugin-style directory — so users
+            can pick whichever install path matches their setup.
+        </div>
+        <div class="slide-num">10 / 15</div>
+    </section>
+
+    <!-- ====================================================== -->
+    <!-- Slide 11 — Pillar 4a: Presenter Mode                     -->
+    <!-- ====================================================== -->
+    <section>
+        <div class="slide">
+            <span class="badge">PILLAR 4 · PRESENT</span>
+            <h2>Presenter Mode — <span class="text-yellow">two windows, one deck</span></h2>
+            <ul>
+                <li><strong>Audience window</strong> — clean slide view, fullscreen-ready, no chrome</li>
+                <li><strong>Presenter window</strong> — current slide, next slide, speaker notes, thumbnail carousel, timer, clock</li>
+                <li><strong>Synchronized</strong> via BroadcastChannel — navigate one, the other follows</li>
+                <li><strong>Editable speaker notes</strong> — click to edit, save back to source HTML (next slide!)</li>
+            </ul>
+            <div class="three-col" style="margin-top:18px;">
+                <div class="feature-card"><div class="icon">⌨️</div><h3>Keyboard</h3><p><kbd>←</kbd> <kbd>→</kbd> navigate · <kbd>F</kbd> fullscreen · <kbd>T</kbd> timer · <kbd>Home</kbd>/<kbd>End</kbd> first/last</p></div>
+                <div class="feature-card"><div class="icon">🎨</div><h3>Theme</h3><p>Light/dark notes panel · swap notes / next-slide layout</p></div>
+                <div class="feature-card"><div class="icon">🔢</div><h3>Carousel</h3><p>Thumbnails of every slide. Click to jump. Toggle on/off, drag to resize.</p></div>
+            </div>
+            <div class="shot-pair" style="grid-template-columns: 1.4fr 1fr;">
+                <div>
+                    <img class="shot" src="_assets/presentation/aimax-presenter.png" alt="Presenter window with current slide, next slide preview, speaker notes, carousel and bottom bar">
+                    <p class="shot-caption">Presenter window — current + next + speaker notes + carousel + timer</p>
+                </div>
+                <div>
+                    <img class="shot" src="_assets/presentation/aimax-presenter-audience.png" alt="Audience window — clean fullscreen slide view">
+                    <p class="shot-caption">Audience window — projector view, no chrome</p>
+                </div>
+            </div>
+        </div>
+        <div class="speaker-notes">
+            Presenter Mode is one of the older features that aged well. It opens the
+            deck in your system browser as two synchronized windows. The audience
+            window is dumb and clean — just the slides. The presenter window has
+            everything you need: the current slide, the next slide previewed, speaker
+            notes panel, a thumbnail carousel of all slides, a timer, a clock, and a
+            slide counter. The two windows talk over BroadcastChannel, so you can
+            advance from either one and they stay in sync. You can mark a slide as a
+            title-slide or end-slide with a CSS class for special styling. Speaker
+            notes go inside `<div class="speaker-notes">…</div>` and are hidden in
+            audience view but visible (and editable!) in the presenter. Keyboard
+            shortcuts make it usable as a real conference tool: arrow keys, F for
+            fullscreen, T for timer. The next slide will show two new presenter
+            features that pushed it from "good demo" to "actually used in production".
+        </div>
+        <div class="slide-num">11 / 15</div>
+    </section>
+
+    <!-- ====================================================== -->
+    <!-- Slide 12 — Pillar 4b: Presenter ergonomics                -->
+    <!-- ====================================================== -->
+    <section>
+        <div class="slide">
+            <span class="badge new">NEW</span>
+            <h2>Presenter ergonomics — <span class="text-yellow">resize &amp; agentic save</span></h2>
+            <div class="two-col">
+                <div>
+                    <h3 class="text-aqua">Carousel resize handle</h3>
+                    <p>Drag the bar above the carousel to grow or shrink it. Thumbnails scale proportionally — 16:9 is preserved by recomputing width from height. Min 72px, max 60% of viewport.</p>
+                    <p style="margin-top:10px; color:#aaa;">Why: with 30+ slides, the default tiny strip wasn't readable; with 5 slides, a tall carousel wasted space. Now you choose.</p>
+                </div>
+                <div>
+                    <h3 class="text-aqua">Agentic Save Notes <span style="font-size:0.7rem; padding:3px 9px; background:var(--orange); border-radius:6px; color:#fff;">NEW</span></h3>
+                    <p>Edit a speaker note in the presenter, click the floppy+sparkle icon. AIMax sends Claude a literal <em>old → new</em> edit targeted at the exact <code>.speaker-notes</code> block. Bottom-right banner tracks pending / done / error per slide.</p>
+                    <p style="margin-top:10px; color:#aaa;">Surgical contract: regex-extracts the exact block, verifies single occurrence, prohibits Read/Grep/Glob/Bash/Write to keep the agent on rails.</p>
+                </div>
+            </div>
+            <div class="shot-pair" style="margin-top:18px;">
+                <div>
+                    <img class="shot" src="_assets/presentation/aimax-save-notes-pending.png" alt="Speaker notes editor with pending save banner showing spinner and 'Saving via Claude (up to 5 min)…'">
+                    <p class="shot-caption">Pending — spinner banner, presenter stays usable</p>
+                </div>
+                <div>
+                    <img class="shot" src="_assets/presentation/aimax-save-notes-success.png" alt="Speaker notes editor with success banner: 'Saved to source. Reload presenter to see the updated note' + Reload presenter button">
+                    <p class="shot-caption">Success — Reload presenter button to refresh from disk</p>
+                </div>
+            </div>
+            <div class="highlight-box" style="margin-top:18px;">
+                <p><strong style="color:#fff">Try it now:</strong> open this deck in the presenter, edit any speaker note, save it. The change lands back in <code>aimax-viewer-presentation.html</code> on disk. Reload presenter to confirm.</p>
+            </div>
+        </div>
+        <div class="speaker-notes">
+            Presenter Mode shipped two ergonomic upgrades in 0.1.29. The carousel
+            resize handle is the simple one — drag the bar above the thumbnail strip
+            and it grows; dragging up grows it, down shrinks. Thumbnails scale 16:9
+            so the proportions stay correct, mins and maxes prevent silly states. It
+            sounds small but the difference between a deck with 8 slides and one with
+            30 slides used to be jarring; now you tune it once. The bigger one is
+            Agentic Save Notes. Speaker notes have always been editable inline — click
+            the panel, type — but until now you had to copy that text back into the
+            source HTML by hand. The new floppy+sparkle button does it surgically: it
+            refetches the deck source with `cache: 'no-store'`, regex-extracts the
+            exact `.speaker-notes` block for the current slide, verifies it appears
+            exactly once, then sends Claude a literal old-to-new edit with strict
+            tool prohibitions. Async banners track each save independently so you can
+            keep navigating while edits go through.
+        </div>
+        <div class="slide-num">12 / 15</div>
+    </section>
+
+    <!-- ====================================================== -->
+    <!-- Slide 13 — Pillar 4c: make-presentable skill              -->
+    <!-- ====================================================== -->
+    <section>
+        <div class="slide">
+            <span class="badge skill">SKILL</span>
+            <span class="badge new">NEW</span>
+            <h2><code>aimax-make-presentable</code> — turn anything into a deck</h2>
+            <p class="lead">When you open an artifact that <em>isn't</em> a deck, "Present in Browser" is greyed out with a tooltip. Right under it, a new menu item <strong style="color:var(--orange)">Make it presentable</strong> appears.</p>
+            <div class="two-col">
+                <div>
+                    <h3 class="text-aqua">Inputs</h3>
+                    <ul>
+                        <li><code>.md</code> — asks <em>which heading level</em> to split on (H1 / H1+H2 / H1+H2+H3 / Manual)</li>
+                        <li><code>.html</code> with no <code>&lt;section&gt;</code> — wraps content using existing h1/h2 as boundaries</li>
+                        <li><code>.html</code> with sections — adapts (adds missing titles, normalizes <code>.title-slide</code>/<code>.end-slide</code>)</li>
+                    </ul>
+                </div>
+                <div>
+                    <h3 class="text-aqua">Decisions asked</h3>
+                    <ul>
+                        <li>Audience / tone (technical, sales, training&hellip;)</li>
+                        <li>Length target (~5 / ~10 / ~20 slides)</li>
+                        <li>Speaker notes? (yes / no / only on key slides)</li>
+                    </ul>
+                </div>
+            </div>
+            <div class="highlight-box" style="margin-top:14px;">
+                <p>Skill not installed locally? The menu item embeds a <strong>fallback prompt</strong> that fetches the skill body from GitHub raw and runs it inline that one time, then tells you how to install it permanently.</p>
+            </div>
+            <div class="shot-pair" style="grid-template-columns: 1fr 1.2fr; margin-top:14px;">
+                <img class="shot thin" src="_assets/presentation/aimax-make-presentable-menu.png" alt="Hamburger menu showing 'Present in Browser' greyed out and 'Make it presentable' highlighted below it">
+                <p style="color:#777; font-size:0.95rem; align-self:center;">When the file isn't a deck, <strong style="color:#fff">Present in Browser</strong> is greyed-out and <strong style="color:var(--orange)">Make it presentable</strong> shows up right under it.<br><br>Output: <code>&lt;input_basename&gt;-deck.html</code> next to the input.</p>
+            </div>
+        </div>
+        <div class="speaker-notes">
+            `aimax-make-presentable` is the skill that closes the loop on the deck
+            contract. The Browser detects "is this a deck" by counting &lt;section&gt;
+            elements via fetch; if there are fewer than two, "Present in Browser"
+            grays out and "Make it presentable" appears. Click it and Claude Code
+            opens with the skill prompt. For a markdown input, the skill counts
+            headings and asks you on which level to split — "you have 3 H1 and 12 H2,
+            split on what?" — then produces one section per chosen heading. For an
+            HTML input without sections it wraps existing h1/h2 boundaries; for one
+            already structured, it adapts (adding missing titles, normalizing
+            classes). Three more questions handle audience, length, and speaker notes.
+            Output is `<input>-deck.html` next to the input — predictable, no surprises.
+            And if the user hasn't installed the skill locally, the menu's prompt has
+            a fallback: WebFetch the skill from GitHub raw, run it inline, tell the
+            user how to install it permanently for next time. First run always works.
+        </div>
+        <div class="slide-num">13 / 15</div>
+    </section>
+
+    <!-- ====================================================== -->
+    <!-- Slide 14 — AI Agent Integration & vscode:// URI           -->
+    <!-- ====================================================== -->
+    <section>
+        <div class="slide">
+            <span class="badge">EXTENSIBILITY</span>
+            <h2>Built for <span class="text-lilla">AI agents</span> from day one</h2>
+            <p class="lead">Every action AIMax exposes through its UI is also reachable from outside via the <code>vscode://</code> URI handler. Generate an artifact, deep-link the user straight into it.</p>
+            <pre><code>vscode://aimax.aimax-viewer/openBrowser?http://127.0.0.1:3125/Artifacts/report.html
+vscode://aimax.aimax-viewer/openHome
+vscode://aimax.aimax-viewer/openCurrentFile</code></pre>
+            <div class="two-col" style="margin-top:18px;">
+                <div>
+                    <h3 class="text-sky">Convention for AI agents</h3>
+                    <ul>
+                        <li>Save artifacts to <code>Artifacts/YYYY-MM-DD_slug.html</code></li>
+                        <li>After generation, open with <code>vscode://&hellip;/openBrowser?http://127.0.0.1:&lt;port&gt;/Artifacts/&hellip;</code></li>
+                        <li>The user lands on the artifact in AIMax — annotate / present / Bridge from there</li>
+                    </ul>
+                </div>
+                <div>
+                    <h3 class="text-sky">Two skills, batteries included</h3>
+                    <ul>
+                        <li><code>aimax-bridge</code> — embed a Claude Bridge widget in any HTML</li>
+                        <li><code>aimax-make-presentable</code> — turn anything into a deck</li>
+                    </ul>
+                    <p style="margin-top:10px; font-size:0.95rem; color:#aaa;">Both ship in <code>skills/</code> + <code>plugins/</code>. Falling back to GitHub raw means agents can use them without install-first friction.</p>
+                </div>
+            </div>
+        </div>
+        <div class="speaker-notes">
+            AIMax was built with AI agents in mind from day one. The hamburger menu is
+            for humans, but the same actions are reachable from any agent through the
+            `vscode://` URI handler. After Claude generates an artifact and writes it
+            to disk, the convention is to immediately open it in AIMax with a
+            `vscode://aimax.aimax-viewer/openBrowser?...` URL — the user sees the
+            output in the viewer, not in their default external browser. Naming
+            convention: `Artifacts/YYYY-MM-DD_slug.html` keeps the folder
+            chronological. The two skills bundle the most common follow-up actions —
+            embedding a Bridge widget into any HTML, turning any input into a deck —
+            and ship in both `skills/` and `plugins/` directories so they install
+            cleanly into either Claude Code skill structure. The fallback-from-GitHub
+            pattern means even if a user hasn't installed a skill, the menu items
+            still work the first time. AI-friendly defaults all the way down.
+        </div>
+        <div class="slide-num">14 / 15</div>
+    </section>
+
+    <!-- ====================================================== -->
+    <!-- Slide 15 — Get started + skill install + wiki call        -->
+    <!-- ====================================================== -->
+    <section class="end-slide">
+        <div class="slide" style="max-width:980px; text-align:left;">
+            <h1 style="font-size:3rem; background:linear-gradient(135deg, var(--blue), var(--sky)); -webkit-background-clip:text; -webkit-text-fill-color:transparent; background-clip:text; text-align:center;">Get Started</h1>
+            <div class="two-col" style="grid-template-columns: 1fr 1fr; margin-top:20px;">
+                <div>
+                    <h3 class="text-aqua" style="margin-bottom:8px;">1 · Install the extension</h3>
+                    <p style="font-size:0.95rem; color:#bbb;">Search <strong style="color:#fff">"AIMax Viewer"</strong> in the VS Code Marketplace, or grab the latest VSIX from GitHub:</p>
+<pre style="font-size:0.8rem; margin-top:8px;"><code># From GitHub Releases (always latest)
+code --install-extension \
+  ~/Downloads/aimax-viewer-X.Y.Z.vsix --force</code></pre>
+                    <p style="font-size:0.85rem; color:#888; margin-top:6px;">
+                        <a href="https://github.com/maxturazzini/aimax-viewer/releases" style="color:var(--sky);">github.com/maxturazzini/aimax-viewer/releases</a>
+                    </p>
+                </div>
+                <div>
+                    <h3 class="text-lilla" style="margin-bottom:8px;">2 · Install the skills (optional)</h3>
+                    <p style="font-size:0.95rem; color:#bbb;">The menu items <code>Add Bridge to this page</code> and <code>Make it presentable</code> work even without local install (GitHub fallback) — but installing them once gives faster, slash-command access:</p>
+<pre style="font-size:0.78rem; margin-top:8px;"><code># Clone or update the repo
+git clone https://github.com/maxturazzini/aimax-viewer.git
+cd aimax-viewer
+
+# Copy the two skills into Claude Code's plugin dir
+cp -r plugins/aimax-bridge ~/.claude/plugins/
+cp -r plugins/aimax-make-presentable ~/.claude/plugins/
+
+# Or install as user-level skills
+cp -r skills/aimax-bridge ~/.claude/skills/
+cp -r skills/aimax-make-presentable ~/.claude/skills/</code></pre>
+                    <p style="font-size:0.85rem; color:#888; margin-top:6px;">Then in Claude Code: <code>/aimax-bridge</code>, <code>/aimax-make-presentable</code>.</p>
+                </div>
+            </div>
+            <div class="highlight-box" style="text-align:left; margin-top:18px;">
+                <h3 class="text-orange" style="margin-bottom:8px;">Help us write a real wiki 🙏</h3>
+                <p style="font-size:1rem;">The extension grew way past what a README and a CHANGELOG can cover. If you've been using AIMax Viewer and want to help, we'd love volunteers for a proper wiki — how-to guides, end-to-end recipes, troubleshooting, screenshots, short screencasts.</p>
+                <p style="font-size:1rem; margin-top:8px;">
+                    Open an issue on
+                    <a href="https://github.com/maxturazzini/aimax-viewer/issues">GitHub</a>
+                    or ping <strong style="color:#fff">@maxturazzini</strong> if you want to take a chunk.
+                </p>
+            </div>
+            <p style="margin-top:18px; font-size:0.85rem; color:#666; text-align:center;">
+                Made with ❤︎ by Max Turazzini · v0.1.29 · 2026
+            </p>
+        </div>
+        <div class="speaker-notes">
+            Closing call to action. Three parts. First: install the extension —
+            either from the VS Code Marketplace by searching "AIMax Viewer", or by
+            downloading the VSIX from GitHub Releases and running
+            `code --install-extension`. Second: install the two skills. They're
+            optional — both `Add Bridge to this page` and `Make it presentable` menu
+            items work out of the box because the prompt embeds a GitHub-raw fallback
+            that fetches the skill on demand. But if you install them locally once,
+            you also get the slash commands `/aimax-bridge` and
+            `/aimax-make-presentable` in any Claude Code conversation, and the menu
+            actions skip the network roundtrip. Two install styles depending on your
+            Claude Code setup: copy `plugins/<name>/` to `~/.claude/plugins/` for the
+            plugin model, or `skills/<name>/` to `~/.claude/skills/` for user-level
+            skills. Pick whichever matches your existing structure. Third: help. The
+            honest situation is that AIMax Viewer started as a one-person
+            project and grew far past what a single README and a single CHANGELOG can
+            document well. There's now Apps Manager, Live Annotation, Claude Bridge
+            with three surfaces, two skills, an HTTP API, a reverse proxy, presenter
+            mode with agentic save — and the docs haven't kept pace. So this is a
+            direct ask for community volunteers. If you've been using AIMax and want
+            to give back, we'd love help writing a proper wiki: how-to guides for
+            common workflows, end-to-end recipes (e.g. "from idea to shippable deck
+            in 10 minutes"), troubleshooting pages, screenshots, short screencasts.
+            Open an issue, tag it `wiki`, and pick a chunk. Thanks for watching.
+        </div>
+        <div class="slide-num">15 / 15</div>
+    </section>
+
+    <!-- ====================================================== -->
+    <!-- Embedded data: the canonical bridge snippet              -->
+    <!-- This is the EXACT code the aimax-bridge skill installs.  -->
+    <!-- Lives in <template> so the browser parses it but doesn't -->
+    <!-- render or execute it. JS reads .innerHTML to copy it.    -->
+    <!-- ====================================================== -->
+    <template id="bridge-snippet"><!-- AIMax Claude Bridge Panel -->
+<div id="aimax-bridge" style="position:fixed;bottom:20px;right:20px;z-index:99999;font-family:system-ui,-apple-system,sans-serif;">
+  <div id="aimax-bridge-panel" style="display:none;width:340px;background:#1e1e2e;border:1px solid #444;border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,0.4);padding:16px;margin-bottom:8px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+      <span style="color:#cdd6f4;font-weight:600;font-size:14px;">Claude Bridge</span>
+      <button onclick="document.getElementById('aimax-bridge-panel').style.display='none'" style="background:none;border:none;color:#888;cursor:pointer;font-size:18px;padding:0;line-height:1;">&times;</button>
+    </div>
+    <textarea id="aimax-bridge-prompt" placeholder="Floating bridge — ask Claude" style="width:100%;height:80px;background:#181825;color:#cdd6f4;border:1px solid #555;border-radius:8px;padding:8px;font-size:13px;resize:vertical;box-sizing:border-box;font-family:inherit;"></textarea>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:8px;">
+      <button onclick="aimaxCopy()" style="background:#cba6f7;color:#1e1e2e;border:none;border-radius:6px;padding:8px;cursor:pointer;font-size:12px;font-weight:600;">Copy</button>
+      <button onclick="aimaxCopyAndBridge('terminal')" style="background:#89b4fa;color:#1e1e2e;border:none;border-radius:6px;padding:8px;cursor:pointer;font-size:12px;font-weight:600;">Copy &amp; Terminal</button>
+      <button onclick="aimaxCopyAndBridge('vscode')" style="background:#a6e3a1;color:#1e1e2e;border:none;border-radius:6px;padding:8px;cursor:pointer;font-size:12px;font-weight:600;">Copy &amp; VS Code</button>
+      <button onclick="aimaxBridge('print')" style="background:#f9e2af;color:#1e1e2e;border:none;border-radius:6px;padding:8px;cursor:pointer;font-size:12px;font-weight:600;">Ask Inline</button>
+    </div>
+    <div id="aimax-bridge-response" style="display:none;margin-top:10px;padding:10px;background:#181825;border-radius:8px;color:#cdd6f4;font-size:13px;max-height:200px;overflow-y:auto;white-space:pre-wrap;word-break:break-word;"></div>
+    <div id="aimax-bridge-status" style="margin-top:6px;font-size:11px;color:#888;text-align:center;"></div>
+  </div>
+  <button onclick="document.getElementById('aimax-bridge-panel').style.display=document.getElementById('aimax-bridge-panel').style.display==='none'?'block':'none'" style="width:48px;height:48px;border-radius:50%;background:#cba6f7;color:#1e1e2e;border:none;cursor:pointer;font-size:22px;box-shadow:0 4px 16px rgba(0,0,0,0.3);display:flex;align-items:center;justify-content:center;margin-left:auto;">&#10042;</button>
+</div>
+<script>
+async function aimaxBridge(mode) {
+  const prompt = document.getElementById('aimax-bridge-prompt').value.trim();
+  if (!prompt) return;
+  const status = document.getElementById('aimax-bridge-status');
+  const respBox = document.getElementById('aimax-bridge-response');
+  status.textContent = mode === 'print' ? 'Waiting for Claude...' : 'Sent!';
+  respBox.style.display = 'none';
+  const fullPrompt = `Context: viewing ${window.location.pathname}\n\n${prompt}`;
+  try {
+    const res = await fetch('/__claude', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt: fullPrompt, mode })
+    });
+    const data = await res.json();
+    if (mode === 'print' && data.response) {
+      respBox.textContent = data.response;
+      respBox.style.display = 'block';
+      status.textContent = '';
+    } else if (data.ok) {
+      status.textContent = 'Sent to Claude!';
+      setTimeout(() => status.textContent = '', 2000);
+    } else {
+      status.textContent = 'Error: ' + (data.error || 'Unknown');
+    }
+  } catch (e) {
+    status.textContent = 'Connection error — is AIMax Viewer running?';
+  }
+}
+function aimaxSafeCopy(text) {
+  return new Promise(function(resolve, reject) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(resolve).catch(function() {
+        aimaxFallbackCopy(text) ? resolve() : reject();
+      });
+    } else {
+      aimaxFallbackCopy(text) ? resolve() : reject();
+    }
+  });
+}
+function aimaxFallbackCopy(text) {
+  var ta = document.createElement('textarea');
+  ta.value = text; ta.style.position = 'fixed'; ta.style.left = '-9999px';
+  document.body.appendChild(ta); ta.focus(); ta.select();
+  var ok = false;
+  try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+  document.body.removeChild(ta); return ok;
+}
+async function aimaxCopy() {
+  var prompt = document.getElementById('aimax-bridge-prompt').value.trim();
+  if (!prompt) return;
+  var s = document.getElementById('aimax-bridge-status');
+  try { await aimaxSafeCopy(prompt); s.textContent = 'Copied!'; setTimeout(() => s.textContent = '', 1500); }
+  catch (e) { s.textContent = 'Copy failed'; }
+}
+async function aimaxCopyAndBridge(mode) {
+  var prompt = document.getElementById('aimax-bridge-prompt').value.trim();
+  if (!prompt) return;
+  try { await aimaxSafeCopy(prompt); } catch (e) {}
+  aimaxBridge(mode);
+}
+</script>
+<!-- End AIMax Claude Bridge --></template>
+
+    <script>
+        // ===== Robust clipboard with execCommand fallback =====
+        function safeCopy(text) {
+            return new Promise(function (resolve, reject) {
+                if (navigator.clipboard && navigator.clipboard.writeText && window.isSecureContext) {
+                    navigator.clipboard.writeText(text).then(
+                        function () { resolve('clipboard-api'); },
+                        function (err) { fallbackCopy(text) ? resolve('execCommand') : reject(err); }
+                    );
+                } else {
+                    fallbackCopy(text) ? resolve('execCommand') : reject(new Error('no clipboard'));
+                }
+            });
+        }
+        function fallbackCopy(text) {
+            var ta = document.createElement('textarea');
+            ta.value = text; ta.style.position = 'fixed';
+            ta.style.left = '-9999px'; ta.style.top = '-9999px';
+            ta.setAttribute('readonly', '');
+            document.body.appendChild(ta);
+            ta.focus(); ta.select();
+            var ok = false;
+            try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+            document.body.removeChild(ta);
+            return ok;
+        }
+
+        // ===== Slide 9 — Live working Bridge =====
+        async function lbAction(mode) {
+            const ta = document.getElementById('lb-prompt');
+            const status = document.getElementById('lb-status');
+            const respBox = document.getElementById('lb-response');
+            const prompt = (ta && ta.value || '').trim();
+
+            // Always show feedback on click — never silent.
+            if (!prompt) {
+                status.textContent = '✎ Type a prompt above first';
+                status.style.color = '#f9c927';
+                setTimeout(() => { status.textContent = ''; status.style.color = ''; }, 2200);
+                if (ta) ta.focus();
+                return;
+            }
+
+            const allowEdits = document.getElementById('lb-edits').checked;
+
+            if (mode === 'copy') {
+                try {
+                    await safeCopy(prompt);
+                    status.textContent = '✓ Copied to clipboard';
+                    status.style.color = '#00d35d';
+                } catch (e) {
+                    status.textContent = '✗ Copy failed: ' + (e.message || 'unknown');
+                    status.style.color = '#ff4c53';
+                }
+                setTimeout(() => { status.textContent = ''; status.style.color = ''; }, 2000);
+                return;
+            }
+
+            const buttons = document.querySelectorAll('.live-bridge .lb-btn');
+            buttons.forEach(b => b.disabled = true);
+            respBox.style.display = 'none'; respBox.textContent = '';
+            status.style.color = '';
+            status.textContent = mode === 'print'
+                ? (allowEdits ? 'Running agent (up to 5 min)…' : 'Waiting for Claude (up to 60s)…')
+                : 'Sending…';
+
+            const fullPrompt = `Context: viewing ${window.location.href}\n\n${prompt}`;
+            try {
+                const res = await fetch('/__claude', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ prompt: fullPrompt, mode, allowEdits })
+                });
+                let data;
+                try { data = await res.json(); }
+                catch (parseErr) {
+                    status.textContent = `✗ Response not JSON (HTTP ${res.status}). Check server logs.`;
+                    status.style.color = '#ff4c53';
+                    return;
+                }
+                if (mode === 'print' && data.response) {
+                    respBox.textContent = data.response;
+                    respBox.style.display = 'block';
+                    status.textContent = '✓ Claude responded';
+                    status.style.color = '#00d35d';
+                    setTimeout(() => { status.textContent = ''; status.style.color = ''; }, 2500);
+                } else if (data.ok) {
+                    status.textContent = mode === 'terminal' ? '✓ Terminal opened' : '✓ Claude Code opened';
+                    status.style.color = '#00d35d';
+                    setTimeout(() => { status.textContent = ''; status.style.color = ''; }, 2500);
+                } else {
+                    status.textContent = '✗ Error: ' + (data.error || 'Unknown');
+                    status.style.color = '#ff4c53';
+                }
+            } catch (e) {
+                status.textContent = '✗ Network error: ' + e.message + ' — is AIMax serving this page?';
+                status.style.color = '#ff4c53';
+                console.error('[live-bridge] fetch failed', e);
+            } finally {
+                buttons.forEach(b => b.disabled = false);
+            }
+        }
+
+        // ===== Slide 9 — Copy the canonical bridge snippet =====
+        function copyBridgeSnippet() {
+            const tpl = document.getElementById('bridge-snippet');
+            const code = tpl ? tpl.innerHTML.trim() : '';
+            const btn = document.getElementById('copy-snippet-btn');
+            if (!code) { btn.textContent = '✗ Snippet not found'; return; }
+            const orig = btn.textContent;
+            const lines = code.split('\n').length;
+            safeCopy(code).then((via) => {
+                btn.classList.add('copied');
+                btn.textContent = '✓ Copied (' + lines + ' lines)';
+                setTimeout(() => {
+                    btn.classList.remove('copied');
+                    btn.textContent = orig;
+                }, 2400);
+                console.log('[copyBridgeSnippet] OK via ' + via + ', ' + code.length + ' chars');
+            }).catch((err) => {
+                btn.textContent = '✗ Copy failed: ' + (err.message || 'unknown');
+                console.error('[copyBridgeSnippet] failed', err);
+                setTimeout(() => { btn.textContent = orig; }, 2200);
+            });
+        }
+    </script>
+
+</body>
+</html>

@@ -5,7 +5,6 @@ out/
 .vscode-test/
 .claude/
 .vscode/
-Artifacts/
 test-results/
 tests/
 PLAN-*.md
@@ -13,3 +12,16 @@ TODO.md
 deploy.sh
 playwright.config.ts
 scripts/.browser-session/
+
+# OS / editor junk
+.DS_Store
+
+# Logs (catches .playwright-mcp/console-*.log too)
+*.log
+
+# Playwright MCP debug output (snapshots + logs)
+.playwright-mcp/
+
+# Environment / secrets
+.env
+.env.*
