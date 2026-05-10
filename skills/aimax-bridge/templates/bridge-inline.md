@@ -17,7 +17,7 @@ Insert this widget wherever you want the inline Claude assistant to appear in th
 <!-- AIMax Claude Bridge — Inline Assistant -->
 <div style="background:#1e1e2e;border:1px solid #444;border-radius:12px;padding:16px;margin:16px 0;font-family:system-ui,-apple-system,sans-serif;">
   <div style="display:flex;gap:8px;margin-bottom:10px;">
-    <input id="aimax-inline-prompt" type="text" placeholder="Ask Claude..."
+    <input id="aimax-inline-prompt" type="text" placeholder="Inline assistant — ask Claude"
       style="flex:1;background:#181825;color:#cdd6f4;border:1px solid #555;border-radius:8px;padding:10px;font-size:14px;"
       onkeydown="if(event.key==='Enter')aimaxInline()">
     <button onclick="aimaxInline()" id="aimax-inline-btn"
@@ -38,11 +38,12 @@ async function aimaxInline() {
   btn.disabled = true;
   respBox.style.display = 'block';
   respBox.textContent = 'Waiting for Claude...';
+  const fullPrompt = `Context: viewing ${window.location.pathname}\n\n${prompt}`;
   try {
     const res = await fetch('/__claude', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt, mode: 'print' })
+      body: JSON.stringify({ prompt: fullPrompt, mode: 'print' })
     });
     const data = await res.json();
     if (data.ok && data.response) {

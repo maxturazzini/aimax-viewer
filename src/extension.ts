@@ -1726,11 +1726,25 @@ function startHttpServer(workspaceFolder: string) {
                 const headers: Record<string, string> = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' };
 
                 if (mode === 'vscode') {
-                    // Copy prompt to clipboard, then open Claude Code panel
+                    // Use official Claude Code URI handler to pre-fill the prompt box.
+                    // Clipboard write kept as fallback for older Claude Code versions.
+                    const claudeUri = vscode.Uri.parse(
+                        `vscode://anthropic.claude-code/open?prompt=${encodeURIComponent(prompt)}`
+                    );
                     vscode.env.clipboard.writeText(prompt).then(() => {
-                        vscode.commands.executeCommand('claude-vscode.newConversation');
+                        return vscode.env.openExternal(claudeUri);
+                    }).then((opened) => {
                         res.writeHead(200, headers);
-                        res.end(JSON.stringify({ ok: true, mode: 'vscode', prompt, note: 'Prompt copied to clipboard. Paste into Claude Code panel.' }));
+                        res.end(JSON.stringify({
+                            ok: true,
+                            mode: 'vscode',
+                            prompt,
+                            opened,
+                            note: 'Prompt pre-filled in Claude Code panel.'
+                        }));
+                    }, (err: Error) => {
+                        res.writeHead(500, headers);
+                        res.end(JSON.stringify({ ok: false, error: err.message || String(err) }));
                     });
                 } else if (mode === 'terminal') {
                     // Open interactive Claude session in terminal with prompt

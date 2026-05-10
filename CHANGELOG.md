@@ -2,6 +2,21 @@
 
 All notable changes to the AIMax Viewer extension will be documented in this file.
 
+## [0.1.29] - 2026-05-09
+
+### Fixed
+- **Claude Bridge `vscode` mode now pre-fills the prompt**: previously `mode: 'vscode'` only copied the prompt to the clipboard and opened a new Claude Code conversation, leaving the user to paste manually. The endpoint now uses the official Claude Code URI handler `vscode://anthropic.claude-code/open?prompt=…` (documented at code.claude.com/docs/en/vs-code) which pre-fills the prompt box automatically. Clipboard write is kept as a fallback for older Claude Code extension versions.
+
+### Changed
+- **Bridge snippets now include page reference**: all bridge HTML snippets (floating panel, inline assistant, demo) automatically prepend `Context: viewing <pathname>\n\n` to the prompt before sending. Gives Claude immediate awareness of which artifact the user is on, with no extra UI.
+- **Distinct placeholders for bridge panels**: each panel type (demo main / floating / inline) now has a unique placeholder text, helping users tell them apart when more than one is visible on the same page.
+
+### Technical
+- `src/extension.ts:1728-1750` — `mode === 'vscode'` branch rewritten to use `vscode.env.openExternal` with the Claude Code URI handler.
+- Snippet edits applied to both `skills/aimax-bridge/` and `plugins/aimax-bridge/` (verified identical with `diff -r`).
+
+---
+
 ## [0.1.28] - 2026-04-28
 
 ### Added

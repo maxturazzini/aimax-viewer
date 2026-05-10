@@ -82,7 +82,7 @@ Insert this snippet before `</body>` in any HTML artifact to add the Claude Brid
       <span style="color:#cdd6f4;font-weight:600;font-size:14px;">Claude Bridge</span>
       <button onclick="document.getElementById('aimax-bridge-panel').style.display='none'" style="background:none;border:none;color:#888;cursor:pointer;font-size:18px;padding:0;line-height:1;">&times;</button>
     </div>
-    <textarea id="aimax-bridge-prompt" placeholder="Enter your prompt..." style="width:100%;height:80px;background:#181825;color:#cdd6f4;border:1px solid #555;border-radius:8px;padding:8px;font-size:13px;resize:vertical;box-sizing:border-box;font-family:inherit;"></textarea>
+    <textarea id="aimax-bridge-prompt" placeholder="Floating bridge — ask Claude" style="width:100%;height:80px;background:#181825;color:#cdd6f4;border:1px solid #555;border-radius:8px;padding:8px;font-size:13px;resize:vertical;box-sizing:border-box;font-family:inherit;"></textarea>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:8px;">
       <button onclick="aimaxCopy()" style="background:#cba6f7;color:#1e1e2e;border:none;border-radius:6px;padding:8px;cursor:pointer;font-size:12px;font-weight:600;">Copy</button>
       <button onclick="aimaxCopyAndBridge('terminal')" style="background:#89b4fa;color:#1e1e2e;border:none;border-radius:6px;padding:8px;cursor:pointer;font-size:12px;font-weight:600;">Copy &amp; Terminal</button>
@@ -102,11 +102,12 @@ async function aimaxBridge(mode) {
   const respBox = document.getElementById('aimax-bridge-response');
   status.textContent = mode === 'print' ? 'Waiting for Claude...' : 'Sent!';
   respBox.style.display = 'none';
+  const fullPrompt = `Context: viewing ${window.location.pathname}\n\n${prompt}`;
   try {
     const res = await fetch('/__claude', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt, mode })
+      body: JSON.stringify({ prompt: fullPrompt, mode })
     });
     const data = await res.json();
     if (mode === 'print' && data.response) {
