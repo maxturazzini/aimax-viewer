@@ -203,6 +203,7 @@ body {
 .notes-font-controls {
     display: inline-flex;
     gap: 4px;
+    align-items: center;
 }
 
 .notes-font-controls button {
@@ -222,6 +223,133 @@ body {
 .notes-font-controls button:hover {
     background: rgba(0,0,0,0.3);
 }
+
+.agentic-save-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 20px;
+    padding: 0 !important;
+}
+
+.agentic-save-btn svg {
+    width: 14px;
+    height: 14px;
+    display: block;
+}
+
+.agentic-save-btn[disabled] {
+    opacity: 0.4;
+    cursor: wait;
+    pointer-events: none;
+}
+
+.agentic-save-btn.flash-success { background: var(--green) !important; color: #fff !important; }
+.agentic-save-btn.flash-error { background: #c33 !important; color: #fff !important; }
+
+/* === AGENTIC SAVE BANNERS === */
+#agenticBanners {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    z-index: 2000;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-width: 380px;
+    pointer-events: none;
+}
+
+.agentic-banner {
+    background: rgba(20, 20, 30, 0.96);
+    color: #eee;
+    border-radius: 6px;
+    padding: 10px 12px 10px 14px;
+    border-left: 4px solid var(--yellow);
+    box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+    font-size: 13px;
+    line-height: 1.4;
+    pointer-events: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.agentic-banner.success { border-left-color: var(--green); }
+.agentic-banner.error { border-left-color: #c33; }
+
+.agentic-banner .ab-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.agentic-banner .ab-title {
+    font-weight: 700;
+    font-size: 12px;
+    letter-spacing: 0.5px;
+    color: #fff;
+    text-transform: uppercase;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.agentic-banner .ab-close {
+    background: transparent;
+    border: none;
+    color: #888;
+    cursor: pointer;
+    font-size: 16px;
+    line-height: 1;
+    padding: 0 4px;
+    font-family: inherit;
+}
+
+.agentic-banner .ab-close:hover { color: #fff; }
+
+.agentic-banner .ab-msg {
+    color: #ccc;
+    font-size: 12px;
+    word-break: break-word;
+}
+
+.agentic-banner .ab-actions {
+    display: flex;
+    gap: 6px;
+    margin-top: 2px;
+}
+
+.agentic-banner .ab-actions button {
+    background: rgba(255,255,255,0.1);
+    color: #fff;
+    border: none;
+    padding: 4px 10px;
+    border-radius: 4px;
+    font-family: 'Inter', sans-serif;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.agentic-banner .ab-actions button:hover { background: var(--blue); }
+
+.agentic-banner .ab-spinner {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border: 2px solid rgba(255,255,255,0.2);
+    border-top-color: var(--yellow);
+    border-radius: 50%;
+    animation: ab-spin 0.8s linear infinite;
+    margin-right: 6px;
+    vertical-align: middle;
+}
+
+@keyframes ab-spin { to { transform: rotate(360deg); } }
 
 .notes-text {
     flex: 1;
@@ -562,6 +690,9 @@ body {
         <div class="notes-content">
             <div class="label">Speaker Notes
                 <span class="notes-font-controls">
+                    <button id="agenticSaveBtn" class="agentic-save-btn" onclick="agenticSaveNotes()" title="Agentic Save Notes" aria-label="Agentic Save Notes">
+                        <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor"><path d="M2 2v12h12V4.5L11.5 2H2zm2 1h6v3h1V3h1.5L13 4.5V13H4v-3h6V8H4V3z"/><path d="M11.6 9.2l.6 1.2 1.2.6-1.2.6-.6 1.2-.6-1.2-1.2-.6 1.2-.6.6-1.2z"/></svg>
+                    </button>
                     <button onclick="changeNotesFontSize(-2)" title="Decrease font">A&minus;</button>
                     <button onclick="changeNotesFontSize(2)" title="Increase font">A+</button>
                 </span>
@@ -587,6 +718,9 @@ body {
         <div class="clock" id="clock"></div>
     </div>
 </div>
+
+<!-- AGENTIC SAVE NOTES BANNERS -->
+<div id="agenticBanners"></div>
 
 <script>
 let audienceWin = null;
@@ -856,6 +990,10 @@ function updatePresenterView() {
 
     // Carousel highlight
     updateCarouselHighlight();
+
+    // Reflect this slide's pending agentic-save state on the button
+    const saveBtn = document.getElementById('agenticSaveBtn');
+    if (saveBtn) saveBtn.disabled = !!(slides[currentIndex] && slides[currentIndex].savePending);
 }
 
 function scrollIframeToSlide(iframe, index) {
@@ -1083,6 +1221,193 @@ function applyToAllIframes(fn) {
     // Also audience window
     if (audienceWin && !audienceWin.closed) {
         try { fn(audienceWin.document); } catch(e) {}
+    }
+}
+
+// === AGENTIC SAVE NOTES ===
+function httpUrlToWorkspaceRel(url) {
+    try {
+        const u = new URL(url);
+        const isLocal = (u.hostname === '127.0.0.1' || u.hostname === 'localhost')
+                     && u.port === window.location.port;
+        if (!isLocal) return null;
+        return decodeURIComponent(u.pathname.replace(/^\//, ''));
+    } catch { return null; }
+}
+
+function splitSectionsRaw(raw) {
+    const re = /<section\b[^>]*>[\s\S]*?<\/section>/gi;
+    return raw.match(re) || [];
+}
+
+function escapeHtmlText(text) {
+    return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function countOccurrences(haystack, needle) {
+    if (!needle) return 0;
+    return haystack.split(needle).length - 1;
+}
+
+function buildSurgicalPrompt(relPath, oldBlock, newBlock) {
+    return [
+        'You will perform exactly ONE Edit on exactly ONE file. No exploration.',
+        '',
+        `File (workspace-relative): ${relPath}`,
+        '',
+        'old_string (verbatim, do not modify whitespace):',
+        '<<<OLD>>>',
+        oldBlock,
+        '<<<END>>>',
+        '',
+        'new_string (verbatim):',
+        '<<<NEW>>>',
+        newBlock,
+        '<<<END>>>',
+        '',
+        'Rules:',
+        '- Use ONLY the Edit tool. Do NOT use Read, Grep, Glob, Bash, or Write.',
+        '- Do not search for context; the strings above are exact.',
+        '- Do not modify any other file. No tests, no commits, no git.',
+        '- If old_string is not found verbatim, reply "NOT_FOUND" and stop.',
+        '- If old_string appears more than once, reply "AMBIGUOUS" and stop.',
+        '- On success, reply with the single token "OK".'
+    ].join('\n');
+}
+
+function showBanner(state, slideIdx, slideTitle, msg) {
+    const container = document.getElementById('agenticBanners');
+    const el = document.createElement('div');
+    el.className = 'agentic-banner ' + state;
+    el.dataset.slide = slideIdx;
+    el.innerHTML = `
+        <div class="ab-head">
+            <div class="ab-title">Slide ${slideIdx + 1} — ${escapeHtmlText(slideTitle).slice(0, 60)}</div>
+            <button class="ab-close" title="Dismiss" aria-label="Dismiss">&times;</button>
+        </div>
+        <div class="ab-msg"></div>
+        <div class="ab-actions" style="display:none;"></div>
+    `;
+    el.querySelector('.ab-close').addEventListener('click', () => el.remove());
+    updateBanner(el, state, msg);
+    container.appendChild(el);
+    return el;
+}
+
+function updateBanner(el, state, msg, withReload) {
+    if (!el || !el.isConnected) return;
+    el.classList.remove('success', 'error');
+    if (state === 'success') el.classList.add('success');
+    else if (state === 'error') el.classList.add('error');
+
+    const msgEl = el.querySelector('.ab-msg');
+    const spinnerHtml = state === 'pending' ? '<span class="ab-spinner"></span>' : '';
+    msgEl.innerHTML = spinnerHtml + escapeHtmlText(msg);
+
+    const actions = el.querySelector('.ab-actions');
+    actions.innerHTML = '';
+    if (withReload) {
+        const btn = document.createElement('button');
+        btn.textContent = 'Reload presenter';
+        btn.title = 'Reload to see the saved note (unsaved edits on other slides will be lost)';
+        btn.addEventListener('click', () => window.location.reload());
+        actions.appendChild(btn);
+        actions.style.display = 'flex';
+    } else {
+        actions.style.display = 'none';
+    }
+
+    if (state === 'success') {
+        setTimeout(() => { if (el.isConnected) el.remove(); }, 12000);
+    }
+}
+
+async function agenticSaveNotes() {
+    const idx = currentIndex;
+    const title = (slides[idx] && slides[idx].title) || `Slide ${idx + 1}`;
+    if (slides[idx] && slides[idx].savePending) return;
+
+    const relPath = httpUrlToWorkspaceRel(deckBaseUrl);
+    if (!relPath) {
+        showBanner('error', idx, title, 'Deck not served from this workspace.');
+        return;
+    }
+
+    const newText = document.getElementById('notesText').innerText;
+    const banner = showBanner('pending', idx, title, 'Reading source…');
+
+    let raw;
+    try {
+        raw = await fetch(deckBaseUrl, { cache: 'no-store' }).then(r => {
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            return r.text();
+        });
+    } catch (e) {
+        updateBanner(banner, 'error', `Could not refetch deck: ${e.message}`);
+        return;
+    }
+
+    const sections = splitSectionsRaw(raw);
+    if (idx >= sections.length) {
+        updateBanner(banner, 'error', `Source has only ${sections.length} sections.`);
+        return;
+    }
+
+    const noteRe = /(<div\b[^>]*\bclass="[^"]*\bspeaker-notes\b[^"]*"[^>]*>)([\s\S]*?)(<\/div>)/i;
+    const match = sections[idx].match(noteRe);
+    if (!match) {
+        updateBanner(banner, 'error', 'No <div class="speaker-notes"> in this section. Add one to the source first.');
+        return;
+    }
+
+    const oldBlock = match[0];
+    const newInner = escapeHtmlText(newText);
+    const newBlock = match[1] + newInner + match[3];
+
+    if (oldBlock === newBlock) {
+        updateBanner(banner, 'success', 'No changes to save.');
+        return;
+    }
+
+    const occurrences = countOccurrences(raw, oldBlock);
+    if (occurrences !== 1) {
+        updateBanner(banner, 'error',
+            occurrences === 0 ? 'Could not locate the original notes block in source.'
+                              : 'Notes content matches multiple slides — edit slightly to disambiguate.');
+        return;
+    }
+
+    if (slides[idx]) slides[idx].savePending = true;
+    if (idx === currentIndex) document.getElementById('agenticSaveBtn').disabled = true;
+    updateBanner(banner, 'pending', 'Saving via Claude (up to 5 min)…');
+
+    const prompt = buildSurgicalPrompt(relPath, oldBlock, newBlock);
+
+    try {
+        const res = await fetch('/__claude', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ prompt, mode: 'print', allowEdits: true })
+        });
+        const data = await res.json().catch(() => ({}));
+        const responseTxt = (data.response || '').trim();
+        const ok = res.ok && data.ok && /^OK\b/.test(responseTxt);
+        if (ok) {
+            updateBanner(banner, 'success',
+                'Saved to source. Reload presenter to see the updated note (unsaved edits on other slides will be lost).',
+                true);
+        } else {
+            let reason;
+            if (/NOT_FOUND/.test(responseTxt)) reason = 'Source changed in flight (NOT_FOUND).';
+            else if (/AMBIGUOUS/.test(responseTxt)) reason = 'Multiple matches detected by Claude (AMBIGUOUS).';
+            else reason = (data.error || responseTxt || `HTTP ${res.status}`).slice(0, 200);
+            updateBanner(banner, 'error', `Save failed: ${reason}`);
+        }
+    } catch (e) {
+        updateBanner(banner, 'error', `Network error: ${e.message}`);
+    } finally {
+        if (slides[idx]) slides[idx].savePending = false;
+        if (idx === currentIndex) document.getElementById('agenticSaveBtn').disabled = false;
     }
 }
 

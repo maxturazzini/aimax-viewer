@@ -60,14 +60,25 @@ Content-Type: application/json
 | Mode | Behavior |
 |------|----------|
 | `terminal` | Opens interactive Claude session in VS Code terminal (default) |
-| `vscode` | Opens Claude Code extension panel for a new conversation |
+| `vscode` | Opens Claude Code extension panel for a new conversation, prompt pre-filled |
 | `print` | Sends prompt to Claude CLI, returns response as `{ok, response}` |
 | `copy` | Echoes prompt back (client handles clipboard) |
+
+### `allowEdits` (print mode only)
+
+The `print` mode has two flavors, controlled by an optional `allowEdits` boolean in the JSON body:
+
+| `allowEdits` | Underlying invocation | Timeout | Use case |
+|---|---|---|---|
+| `false` (default) | `claude -p --tools "" --system-prompt "concise…" --no-session-persistence -` | 60s | Quick chat answer; cannot read or modify any file |
+| `true` | `claude -p --dangerously-skip-permissions --no-session-persistence -` | 5 min | Full agent with auto-approved permissions; can read/edit files |
+
+Default to `false` for fast Q&A. Set `allowEdits: true` only when the user explicitly asked for a file change.
 
 ### Important notes
 
 - The artifact is served by the same HTTP server, so `/__claude` is a **relative URL** — no need for `http://127.0.0.1:port`, just use `fetch('/__claude', ...)`.
-- The `print` mode may take up to 120 seconds to respond. Always show a loading state.
+- The `print` mode budget is **60s** by default (chat) or **5 min** with `allowEdits: true` (agent). Always show a loading state. Errors surface as `{ok: false, error: "Timeout (Ns)"}` (HTTP 504) or `{ok: false, error: stderr}`.
 - All responses are JSON with `Access-Control-Allow-Origin: *`.
 
 ## Embedded HTML snippet — Floating Action Panel

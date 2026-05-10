@@ -2,7 +2,7 @@
   "name": "aimax-viewer",
   "displayName": "AIMax Viewer",
   "description": "Auto-open Artifacts at startup + internal browser for localhost",
-  "version": "0.1.32",
+  "version": "0.1.29",
   "publisher": "maxturazzini",
   "icon": "icon.png",
   "repository": {
@@ -351,15 +351,11 @@
           "default": true,
           "description": "Enable Live Annotation: lets you annotate any localhost dev app (Vite, Streamlit, FastAPI...) by routing cross-port URLs through the AIMax proxy, which injects the annotation client. Disable to load apps directly — annotation will then work only on pages served by AIMax itself."
         },
-        "aimaxViewer.liveInspect.injectBridge": {
-          "type": "boolean",
-          "default": false,
-          "description": "Add a floating Claude button inside annotated pages, on top of your app. Useful for sending annotations to Claude without leaving the page, but the overlay can clash with some apps' CSS/JS. Requires Live Annotation."
-        },
-        "aimaxViewer.bridge.toolbarButton": {
-          "type": "boolean",
-          "default": true,
-          "description": "Show the Claude Bridge button in the Browser panel toolbar. The button opens a dropdown inside the webview chrome — it never touches the page DOM and is always safe. Hidden from the in-app menu; configure here only if you want to declutter the toolbar."
+        "aimaxViewer.liveInspect.skipHosts": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Hosts excluded from Live Annotation. Format: \"host:port\" entries (e.g. \"localhost:8766\"). Pages on these hosts load directly without the AIMax proxy — annotation will NOT work there, but the page renders cleanly without injection. Useful for apps that conflict with proxy injection. Reload required."
         },
         "aimaxViewer.appsManager.enabled": {
           "type": "boolean",

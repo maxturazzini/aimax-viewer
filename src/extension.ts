@@ -5,7 +5,6 @@ import * as http from 'http';
 import { execFile, spawn } from 'child_process';
 import { parseMarkdown, wrapMarkdownHtml, extractFrontmatter } from './markdown-parser';
 import { ANNOTATION_CLIENT_JS, injectAnnotationClient } from './annotation-client';
-import { injectBridgePanel } from './bridge-panel';
 import { ArtifactsTreeProvider, ArtifactsWebviewProvider, ArtifactItem, FolderConfig } from './treeview-provider';
 import { RecentsWebviewProvider } from './recents-provider';
 import { AppsManager } from './apps-manager';
@@ -20,13 +19,11 @@ let extensionContext: vscode.ExtensionContext;
 let treeProvider: ArtifactsTreeProvider | undefined;
 let webviewProvider: ArtifactsWebviewProvider | undefined;
 let appsManager: AppsManager | undefined;
-// Snapshot of toolbar toggles taken at activation. Kept in module scope so the
-// behaviour is locked for the session: any change to these settings only takes
-// effect after a window reload. This keeps the three toggles consistent —
-// users learn one rule (flip → reload → applies) instead of three different
-// timings.
+// Snapshot of the Live Annotation toggle + skip-list taken at activation.
+// Kept in module scope so any setting change requires a window reload —
+// predictable behaviour.
 let liveInspectEnabledSnapshot = true;
-let liveInspectInjectBridgeSnapshot = true;
+let liveInspectSkipHostsSnapshot: string[] = [];
 let appsTreeProvider: AppsTreeProvider | undefined;
 let recentsProvider: RecentsWebviewProvider | undefined;
 let cachedFaviconDataUri: string | undefined;
@@ -49,9 +46,7 @@ type BridgeResult = { ok: boolean; mode?: string; prompt?: string; response?: st
 // Human-friendly labels + reload-required map for toolbar config toggles.
 // Shown as an info banner when a user flips a toggle from the toolbar menu.
 const CONFIG_TOGGLE_INFO: Record<string, { label: string; reload: boolean }> = {
-    'aimaxViewer.liveInspect.enabled':       { label: 'Live Annotation',                          reload: true },
-    'aimaxViewer.liveInspect.injectBridge':  { label: 'Floating Claude button on annotated pages', reload: true },
-    'aimaxViewer.bridge.toolbarButton':      { label: 'Bridge Button in Toolbar',                  reload: true },
+    'aimaxViewer.liveInspect.enabled': { label: 'Live Annotation', reload: true },
 };
 
 function applyConfigToggle(key: string, value: unknown): void {
@@ -198,10 +193,9 @@ function getConfig() {
         // ZeroUI layout options
         startupOpenClaudeCode: config.get<boolean>('startup.openClaudeCode', false),
         startupFocusSidebar: config.get<boolean>('startup.focusSidebar', true),
-        // Live Inspect (proxy + bridge unification)
+        // Live Annotation (cross-port proxy with annotation-client injection)
         liveInspectEnabled: config.get<boolean>('liveInspect.enabled', true),
-        liveInspectInjectBridge: config.get<boolean>('liveInspect.injectBridge', false),
-        bridgeToolbarButton: config.get<boolean>('bridge.toolbarButton', true)
+        liveInspectSkipHosts: config.get<string[]>('liveInspect.skipHosts', [])
     };
 }
 
@@ -236,10 +230,10 @@ export function activate(context: vscode.ExtensionContext) {
     const config = getConfig();
     console.log('[AIMax] Config:', JSON.stringify(config));
 
-    // Snapshot reload-required toggles. Subsequent setting changes are ignored
-    // until the window is reloaded — mirrors the behaviour of bridge.toolbarButton.
+    // Snapshot Live Annotation + skip list. Subsequent setting changes are
+    // ignored until the window is reloaded — predictable rule for the user.
     liveInspectEnabledSnapshot = config.liveInspectEnabled;
-    liveInspectInjectBridgeSnapshot = config.liveInspectInjectBridge;
+    liveInspectSkipHostsSnapshot = config.liveInspectSkipHosts || [];
 
     // Port logic:
     // - If user set custom port (different from default 3124) → use fixed port
@@ -754,17 +748,141 @@ export function activate(context: vscode.ExtensionContext) {
     );
 }
 
+// Map a URL served by the AIMax HTTP server back to a workspace-relative path.
+// Returns null for proxy/presenter/api URLs, non-HTML files, missing files, or
+// URLs that don't belong to AIMax. Used by the "Add Claude Bridge to this page"
+// menu action to confirm we know which file to ask Claude to edit.
+function urlToWorkspacePath(url: string): { absolute: string; relative: string } | null {
+    const ws = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (!ws) return null;
+    try {
+        const u = new URL(url);
+        if (u.hostname !== '127.0.0.1' || u.port !== String(serverPort)) return null;
+        const p = u.pathname;
+        if (p.startsWith('/__proxy__/') || p.startsWith('/__presenter') || p.startsWith('/api/')) return null;
+        if (!p.toLowerCase().endsWith('.html')) return null;
+        const rel = decodeURIComponent(p).replace(/^\/+/, '');
+        const abs = path.join(ws, rel);
+        if (!fs.existsSync(abs)) return null;
+        return { absolute: abs, relative: rel };
+    } catch {
+        return null;
+    }
+}
+
+// Canonical Claude Bridge snippet lives in the aimax-bridge skill on GitHub.
+// The extension never inlines it — single source of truth.
+const BRIDGE_SKILL_TEMPLATE_URL =
+    'https://raw.githubusercontent.com/maxturazzini/aimax-viewer/main/skills/aimax-bridge/templates/bridge-buttons.md';
+
+// Add the host:port behind a proxied URL to liveInspect.skipHosts so future
+// loads of that app bypass the proxy entirely. Adds both localhost and
+// 127.0.0.1 forms because either may appear in user-typed URLs. Reload
+// required (snapshots are taken at activation).
+function dispatchSkipAnnotForHost(url: string): void {
+    let port: number | null = null;
+    try {
+        const u = new URL(url);
+        const m = u.pathname.match(/^\/__proxy__\/(\d+)\//);
+        if (m) port = parseInt(m[1], 10);
+    } catch { /* parse failure → port stays null */ }
+    if (!port) {
+        vscode.window.showWarningMessage(
+            'AIMax: This page is not a proxied URL — nothing to add to the skip list.'
+        );
+        return;
+    }
+    const cfg = vscode.workspace.getConfiguration('aimaxViewer');
+    const current = cfg.get<string[]>('liveInspect.skipHosts', []);
+    const additions = [`localhost:${port}`, `127.0.0.1:${port}`].filter(h => !current.includes(h));
+    if (additions.length === 0) {
+        vscode.window.showInformationMessage(
+            `AIMax: localhost:${port} is already in the Live Annotation skip list.`
+        );
+        return;
+    }
+    const next = [...current, ...additions];
+    cfg.update('liveInspect.skipHosts', next, vscode.ConfigurationTarget.Workspace).then(() => {
+        vscode.window.showInformationMessage(
+            `AIMax: added ${additions.join(', ')} to Live Annotation skip list. Reload required to apply.`,
+            'Reload Window'
+        ).then(choice => {
+            if (choice === 'Reload Window') {
+                vscode.commands.executeCommand('workbench.action.reloadWindow');
+            }
+        });
+    }, (err: Error) => {
+        vscode.window.showErrorMessage(`AIMax: failed to update skip list: ${err.message}`);
+    });
+}
+
+// Open Claude Code with a prompt asking it to inject the bridge into the
+// given local AIMax-served URL. Falls back to clipboard if Claude Code is
+// not installed (vscode.env.openExternal returns false). Used by the
+// "Add Claude Bridge to this page" menu action in both browser panels.
+function dispatchAddBridgeToPage(url: string): void {
+    const mapped = urlToWorkspacePath(url);
+    if (!mapped) {
+        vscode.window.showWarningMessage(
+            'AIMax: This page is not a local AIMax-served HTML file — cannot add the bridge here.'
+        );
+        return;
+    }
+    const prompt = buildBridgeInjectionPrompt(mapped.relative);
+    const claudeUri = vscode.Uri.parse(
+        `vscode://anthropic.claude-code/open?prompt=${encodeURIComponent(prompt)}`
+    );
+    vscode.env.openExternal(claudeUri).then(opened => {
+        if (!opened) {
+            vscode.env.clipboard.writeText(prompt);
+            vscode.window.showInformationMessage(
+                'Claude Code not available — bridge injection prompt copied to clipboard.'
+            );
+        }
+    });
+}
+
+function buildBridgeInjectionPrompt(relativePath: string): string {
+    return [
+        `Add the AIMax Claude Bridge floating panel persistently to this artifact.`,
+        ``,
+        `**Target file:** \`${relativePath}\` (an HTML artifact served by AIMax Viewer).`,
+        ``,
+        `**How to apply** — try in this order:`,
+        ``,
+        `1. **Skill path (preferred).** If the \`aimax-bridge\` skill is installed in this Claude Code session, run \`/aimax-bridge buttons\` targeting \`${relativePath}\`. The skill knows where to insert the snippet.`,
+        ``,
+        `2. **GitHub fallback.** If the skill is not installed, WebFetch the template:`,
+        `   \`${BRIDGE_SKILL_TEMPLATE_URL}\``,
+        `   The fetched markdown contains a single \`\`\`html code block — extract it and insert it verbatim into \`${relativePath}\`, immediately before the closing \`</body>\` tag.`,
+        ``,
+        `**Constraints:**`,
+        `- Before inserting, check if the file already contains \`data-aimax-bridge-injected\` or \`window.__aimaxBridgeLoaded\`. If yes, STOP and tell me — the bridge is already there.`,
+        `- Do not modify any other content in the file.`,
+        `- Preserve original indentation outside the inserted block.`,
+        ``,
+        `After the edit, ask me to reload the page in AIMax Viewer to see the floating Claude button (bottom-right of the artifact).`
+    ].join('\n');
+}
+
 function rewriteToProxy(url: string): string {
     // Route external localhost URLs through the AIMaxViewer proxy so the
-    // annotation client and Claude Bridge can be injected. Skip our own server
-    // port (already served directly). Gated by liveInspect.enabled.
-    // Uses the activation-time snapshot — config changes need a window reload.
+    // annotation client can be injected. Skip our own server port
+    // (already served directly). Gated by liveInspect.enabled and the
+    // per-host skip list. Uses activation-time snapshots — config changes
+    // need a window reload.
     if (!liveInspectEnabledSnapshot) return url;
     try {
         const u = new URL(url);
         if (u.hostname !== 'localhost' && u.hostname !== '127.0.0.1') return url;
         const port = parseInt(u.port || (u.protocol === 'https:' ? '443' : '80'), 10);
         if (!port || port === serverPort) return url;
+        // Skip-list bypass: pages on these host:port pairs load directly,
+        // no proxy, no annotation-client injection. For apps that conflict
+        // with the proxy (e.g. strict frame-ancestors CSP, in-page routers
+        // that choke on /__proxy__/<port>/ prefixes).
+        const hostPort = `${u.hostname}:${port}`;
+        if (liveInspectSkipHostsSnapshot.includes(hostPort)) return url;
         return `http://127.0.0.1:${serverPort}/__proxy__/${port}${u.pathname}${u.search}${u.hash}`;
     } catch {
         return url;
@@ -859,6 +977,10 @@ function openInBrowser(url: string, customTitle?: string) {
                 vscode.env.openExternal(vscode.Uri.parse(presenterUrl));
             } else if (message.command === 'makePresentable' && message.url) {
                 openMakePresentableInClaude(message.url);
+            } else if (message.command === 'addBridgeToPage' && message.url) {
+                dispatchAddBridgeToPage(message.url);
+            } else if (message.command === 'skipAnnotForHost' && message.url) {
+                dispatchSkipAnnotForHost(message.url);
             } else if (message.command === 'claudeBridge') {
                 handleClaudeBridge(message.mode, (message.prompt || '').trim(), (result) => {
                     newPanel.webview.postMessage({ command: 'bridgeResult', ...result });
@@ -913,6 +1035,10 @@ function openInBrowser(url: string, customTitle?: string) {
                 vscode.env.openExternal(vscode.Uri.parse(presenterUrl));
             } else if (message.command === 'makePresentable' && message.url) {
                 openMakePresentableInClaude(message.url);
+            } else if (message.command === 'addBridgeToPage' && message.url) {
+                dispatchAddBridgeToPage(message.url);
+            } else if (message.command === 'skipAnnotForHost' && message.url) {
+                dispatchSkipAnnotForHost(message.url);
             } else if (message.command === 'claudeBridge') {
                 handleClaudeBridge(message.mode, (message.prompt || '').trim(), (result) => {
                     if (browserPanel) {
@@ -937,8 +1063,6 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
     const cfg = getConfig();
     const homePage = cfg.homePage;
     const liveInspectEnabled = cfg.liveInspectEnabled;
-    const liveInspectInjectBridge = cfg.liveInspectInjectBridge;
-    const bridgeToolbarButton = cfg.bridgeToolbarButton;
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1001,6 +1125,20 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
             background: #3c3c3c;
             border-radius: 4px;
             padding: 0 4px;
+            gap: 6px;
+            min-width: 0;
+        }
+        .address-display {
+            flex: 1;
+            min-width: 0;
+            color: #cccccc;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            font-size: 12px;
+            padding: 0 8px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            opacity: 0.85;
         }
         .artifact-select {
             flex: 1;
@@ -1393,7 +1531,9 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
     <div class="toolbar">
         <button class="nav-btn" id="backBtn" onclick="goBack()" title="Back" disabled>←</button>
         <button class="nav-btn" id="fwdBtn" onclick="goForward()" title="Forward" disabled>→</button>
-        <button class="nav-btn" onclick="reload()" title="Reload">↻</button>
+        <button class="nav-btn" onclick="reload()" title="Reload" style="display:inline-flex;align-items:center;justify-content:center;color:#00d4ff;">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3.51-7.13"/><polyline points="21 4 21 10 15 10"/></svg>
+        </button>
         ${showDropdown ? `
         <div class="select-wrapper">
             <select class="artifact-select" id="artifactSelect" onchange="loadArtifact(this.value)">
@@ -1406,6 +1546,7 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
         </div>
         ` : `
         <div class="url-display">
+            <span id="addressDisplay" class="address-display" title="${url}">${url}</span>
             <button class="select-info-btn" id="infoBtn">
                 ⓘ
                 <span class="info-tooltip" id="infoTooltip">${url}</span>
@@ -1415,9 +1556,7 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
         <button class="toolbar-btn" id="annotBtn" onclick="toggleAnnotMode()" title="Toggle annotation mode">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#00d4ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
         </button>
-        ${bridgeToolbarButton ? `
         <button class="toolbar-btn" id="bridgeToolbarBtn" onclick="aimaxBridgeToggle()" title="Claude Bridge"><span style="color:#00d4ff;font-size:14px;line-height:1;">&#10042;</span></button>
-        ` : ''}
         <button class="toolbar-btn" onclick="openTerminal()" title="Open new terminal">
             <span style="color: #00d4ff; font-size: 14px;">&gt;</span>
         </button>
@@ -1444,13 +1583,13 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 1.5 L13.6 9.2 L21.3 7.6 L15.7 12 L21.3 16.4 L13.6 14.8 L12 22.5 L10.4 14.8 L2.7 16.4 L8.3 12 L2.7 7.6 L10.4 9.2 Z"/></svg>
             </button>
             <button class="aimax-icon-btn" onclick="annotRefresh()" title="Refresh page">
-                <span class="label">Refresh</span>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3.51-7.13"/><polyline points="21 4 21 10 15 10"/></svg>
             </button>
             <button class="aimax-icon-btn" onclick="clearAnnotations()" title="Clear all">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>
             </button>
             <button class="aimax-icon-btn" onclick="toggleAnnotMode(false)" title="Close">
-                <span class="label" style="font-size:13px;">×</span>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="6" y1="18" x2="18" y2="6"/></svg>
             </button>
         </div>
         <div class="annot-body" id="annotBody"><div class="annot-empty">Hover an element and click to add a comment.</div></div>
@@ -1500,15 +1639,14 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
         <button class="menu-item" onclick="openClaudeCode()">Open Claude Code</button>
         <button class="menu-item" onclick="openExternal()">Open External Browser</button>
         <button class="menu-item" onclick="openCurrentFile()">Open Current Editor File</button>
+        <button class="menu-item" id="addBridgeMenuItem" onclick="addBridgeToPage()" disabled title="Available only on local HTML artifacts served by AIMax Viewer">Add Claude Bridge to this page (persistent)…</button>
         <button class="menu-item" onclick="goHome()">Go to Home</button>
         <div class="menu-divider"></div>
         <!-- Annotation toggles -->
         <button class="menu-item" id="toggleLiveInspectBtn" onclick="toggleLiveInspect()">
             <span id="liveInspectStatus">${liveInspectEnabled ? '✓' : '✗'}</span> Enable Live Annotation
         </button>
-        <button class="menu-item" id="toggleBridgeInjectBtn" onclick="toggleBridgeInject()" ${!liveInspectEnabled ? 'disabled style="opacity:0.4;cursor:not-allowed;" title="Requires Live Annotation"' : ''}>
-            <span id="bridgeInjectStatus">${liveInspectInjectBridge ? '✓' : '✗'}</span> Floating Claude button on annotated pages
-        </button>
+        <button class="menu-item" id="skipAnnotMenuItem" onclick="skipAnnotForHost()" disabled title="Available only on proxied (cross-port) pages">Skip Live Annotation for this host…</button>
     </div>
     <iframe id="frame" src="${url}" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-top-navigation-by-user-activation allow-downloads" allow="clipboard-read; clipboard-write; fullscreen"></iframe>
 
@@ -1752,6 +1890,67 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
             toggleMenu();
         }
 
+        function addBridgeToPage() {
+            vscode.postMessage({ command: 'addBridgeToPage', url: currentUrl });
+            toggleMenu();
+        }
+
+        function skipAnnotForHost() {
+            vscode.postMessage({ command: 'skipAnnotForHost', url: currentUrl });
+            toggleMenu();
+        }
+
+        // Populate the toolbar address bar with the page title (preferred) or
+        // the current URL (fallback). The title is read from the iframe when
+        // accessible (same-origin AIMax pages); otherwise we show the URL.
+        // The (i) tooltip always carries the full URL regardless.
+        function refreshAddressDisplay() {
+            const el = document.getElementById('addressDisplay');
+            if (!el) return;
+            let label = currentUrl || '';
+            try {
+                const t = (frame.contentDocument && frame.contentDocument.title || '').trim();
+                if (t) label = t;
+            } catch (_) { /* cross-origin → keep URL */ }
+            el.textContent = label;
+            el.title = currentUrl || '';
+        }
+
+        // Enable "Skip Live Annotation for this host" only when the iframe
+        // is currently loading a proxied URL (recognisable by /__proxy__/<port>/
+        // in the path). On AIMax-internal or external pages it's not applicable.
+        function refreshSkipAnnotAvailability(url) {
+            const item = document.getElementById('skipAnnotMenuItem');
+            if (!item) return;
+            const proxyMatch = (url || '').match(/\\/__proxy__\\/(\\d+)\\//);
+            item.disabled = !proxyMatch;
+            item.title = proxyMatch
+                ? 'Add localhost:' + proxyMatch[1] + ' to the Live Annotation skip list (reload required)'
+                : 'Available only on proxied (cross-port) pages';
+        }
+
+        // Toggle the "Add Claude Bridge…" menu item: enabled only when the
+        // current iframe URL is a local AIMax-served HTML file (i.e. one we
+        // know how to map back to a workspace path on the host side).
+        function refreshAddBridgeAvailability(url) {
+            const item = document.getElementById('addBridgeMenuItem');
+            if (!item) return;
+            let isLocalAimax = false;
+            try {
+                const u = new URL(url);
+                isLocalAimax = u.hostname === '127.0.0.1' &&
+                    u.port === '${serverPort}' &&
+                    !u.pathname.startsWith('/__proxy__/') &&
+                    !u.pathname.startsWith('/__presenter') &&
+                    !u.pathname.startsWith('/api/') &&
+                    u.pathname.toLowerCase().endsWith('.html');
+            } catch (_) { /* keep disabled */ }
+            item.disabled = !isLocalAimax;
+            item.title = isLocalAimax
+                ? 'Open Claude Code with a prompt to inject the bridge into this HTML file'
+                : 'Available only on local HTML artifacts served by AIMax Viewer';
+        }
+
         function openTerminal() {
             vscode.postMessage({ command: 'openTerminal' });
         }
@@ -1802,6 +2001,10 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
                 // webview-iframe cross-origin restriction that blocks
                 // frame.contentDocument access).
                 detectDeckByFetch(currentUrl);
+                refreshAddBridgeAvailability(currentUrl);
+                refreshSkipAnnotAvailability(currentUrl);
+                refreshAnnotEmptyMessage();
+                refreshAddressDisplay();
 
                 // Note: Metadata is received via postMessage from the iframe content
                 // (see message listener below)
@@ -1811,6 +2014,10 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
                 vscode.postMessage({ command: 'updateTitle', title: currentUrl });
                 // Detection still runs — fetch works regardless of iframe sandbox.
                 detectDeckByFetch(currentUrl);
+                refreshAddBridgeAvailability(currentUrl);
+                refreshSkipAnnotAvailability(currentUrl);
+                refreshAnnotEmptyMessage();
+                refreshAddressDisplay();
             }
         };
 
@@ -1857,6 +2064,11 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
         // Run detection at first load too (frame.onload fires after this script,
         // but if currentUrl is already set we want a result immediately).
         detectDeckByFetch(currentUrl);
+        refreshAddBridgeAvailability(currentUrl);
+        refreshSkipAnnotAvailability(currentUrl);
+        refreshAddressDisplay();
+        // Empty-state runs after annotations is declared below; defer one tick.
+        setTimeout(() => { try { refreshAnnotEmptyMessage(); } catch (_) {} }, 0);
 
         // Annotation mode state
         let annotActive = false;
@@ -1918,10 +2130,55 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
             return lines.join('\\n');
         }
 
+        // Empty-state message: depends on what kind of URL we're on.
+        // Annotation only works when the AIMax annotation client is injected,
+        // which happens in two cases: (a) AIMax serves the file directly
+        // (its own port), (b) the AIMax proxy relays a cross-port URL.
+        // If the URL is cross-port localhost without /__proxy__/ it means
+        // either Live Annotation is OFF globally or this host is in the
+        // skip list — annotation can't work on that URL until that changes.
+        function annotEmptyMessage() {
+            const base = 'Hover an element and click to add a comment.';
+            const tipStyle = 'opacity:0.7;font-size:0.9em';
+            let url = currentUrl || '';
+            let u = null;
+            try { u = new URL(url); } catch (_) {}
+            if (!u) return base;
+            const isProxied = u.pathname.indexOf('/__proxy__/') === 0 || u.pathname.indexOf('/__proxy__/') !== -1;
+            const isAimaxOwn = (u.hostname === '127.0.0.1' || u.hostname === 'localhost')
+                && u.port === '${serverPort}'
+                && !isProxied;
+            const isCrossPortLocal = (u.hostname === 'localhost' || u.hostname === '127.0.0.1')
+                && u.port !== '${serverPort}'
+                && u.port !== '';
+            const isExternal = u.hostname !== 'localhost' && u.hostname !== '127.0.0.1';
+
+            if (isAimaxOwn || isProxied) {
+                // Annotation should work. Add a soft tip only on proxied URLs
+                // because that's where injection can occasionally fail.
+                if (isProxied) {
+                    return base + '<br><br><span style="' + tipStyle + '">If overlays don\\'t appear, the proxy injection may have failed. Try reloading, or use "Skip Live Annotation for this host" if this app conflicts with the proxy.</span>';
+                }
+                return base;
+            }
+            if (isCrossPortLocal) {
+                return '<span style="' + tipStyle + '">This is an external app on <code>' + u.host + '</code> loaded directly — Live Annotation is off here (either globally or because this host is in the skip list). Re-enable it from the ☰ menu, or remove <code>' + u.host + '</code> from <code>aimaxViewer.liveInspect.skipHosts</code> in settings to annotate this page.</span>';
+            }
+            if (isExternal) {
+                return '<span style="' + tipStyle + '">Live Annotation is available only on localhost apps. This page is external (' + u.hostname + ').</span>';
+            }
+            return base;
+        }
+        function refreshAnnotEmptyMessage() {
+            if (typeof annotations !== 'undefined' && annotations.length > 0) return;
+            const body = document.getElementById('annotBody');
+            if (body) body.innerHTML = '<div class="annot-empty">' + annotEmptyMessage() + '</div>';
+        }
+
         function renderAnnotations() {
             annotCount.textContent = 'Annotations (' + annotations.length + ')';
             if (annotations.length === 0) {
-                annotBody.innerHTML = '<div class="annot-empty">Hover an element and click to add a comment.</div>';
+                annotBody.innerHTML = '<div class="annot-empty">' + annotEmptyMessage() + '</div>';
                 return;
             }
             const rows = annotations.map((a, i) => {
@@ -2098,16 +2355,10 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
             if (el) el.textContent = value ? '✓' : '✗';
         }
         let _liveInspectEnabled = ${liveInspectEnabled};
-        let _liveInspectInjectBridge = ${liveInspectInjectBridge};
         function toggleLiveInspect() {
             _liveInspectEnabled = !_liveInspectEnabled;
             _setToggleStatus('liveInspectStatus', _liveInspectEnabled);
             vscode.postMessage({ command: 'updateConfig', key: 'aimaxViewer.liveInspect.enabled', value: _liveInspectEnabled });
-        }
-        function toggleBridgeInject() {
-            _liveInspectInjectBridge = !_liveInspectInjectBridge;
-            _setToggleStatus('bridgeInjectStatus', _liveInspectInjectBridge);
-            vscode.postMessage({ command: 'updateConfig', key: 'aimaxViewer.liveInspect.injectBridge', value: _liveInspectInjectBridge });
         }
 
         function removeAnnotation(n) {
@@ -2327,10 +2578,6 @@ function startHttpServer(workspaceFolder: string) {
                         html = baseTag + html;
                     }
                     html = injectAnnotationClient(html);
-                    // Snapshot — reload required for changes to apply (consistent with the other toggles).
-                    if (liveInspectInjectBridgeSnapshot) {
-                        html = injectBridgePanel(html);
-                    }
                     res.writeHead(proxyRes.statusCode || 200, outHeaders as http.OutgoingHttpHeaders);
                     res.end(html);
                 });
@@ -2983,7 +3230,9 @@ function wrapWithToolbarAndLinkHandler(html: string, title: string, faviconUri: 
         <img src="${faviconUri}" class="aimax-brand-icon" onclick="goHome()" alt="AI, MAX" title="Home" />
         <button class="aimax-nav-btn" id="backBtn" onclick="goBack()" title="Back" disabled>←</button>
         <button class="aimax-nav-btn" id="fwdBtn" onclick="goForward()" title="Forward" disabled>→</button>
-        <button class="aimax-info-btn" onclick="reload()" title="Reload" style="font-size: 18px;">↻</button>
+        <button class="aimax-info-btn" onclick="reload()" title="Reload" style="display:inline-flex;align-items:center;justify-content:center;color:#00d4ff;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3.51-7.13"/><polyline points="21 4 21 10 15 10"/></svg>
+        </button>
         <span class="aimax-title">${title}</span>
         <button class="aimax-toolbar-btn" onclick="openArtifactsBrowser()" title="Open Artifacts Browser">
             <span style="font-size: 12px;">[:]</span>
@@ -3016,13 +3265,13 @@ function wrapWithToolbarAndLinkHandler(html: string, title: string, faviconUri: 
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 1.5 L13.6 9.2 L21.3 7.6 L15.7 12 L21.3 16.4 L13.6 14.8 L12 22.5 L10.4 14.8 L2.7 16.4 L8.3 12 L2.7 7.6 L10.4 9.2 Z"/></svg>
             </button>
             <button class="aimax-icon-btn" onclick="aimaxAnnotRefresh()" title="Refresh page">
-                <span class="label">Refresh</span>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3.51-7.13"/><polyline points="21 4 21 10 15 10"/></svg>
             </button>
             <button class="aimax-icon-btn" onclick="aimaxClearAnnot()" title="Clear all">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>
             </button>
             <button class="aimax-icon-btn" onclick="aimaxToggleAnnot(false)" title="Close">
-                <span class="label" style="font-size:13px;">×</span>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="6" y1="18" x2="18" y2="6"/></svg>
             </button>
         </div>
         <div class="aimax-annot-body" id="aimaxAnnotBody"><div class="aimax-annot-empty">Hover an element and click to add a comment.</div></div>

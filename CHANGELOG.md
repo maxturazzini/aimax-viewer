@@ -2,100 +2,253 @@
 
 All notable changes to the AIMax Viewer extension will be documented in this file.
 
-## [0.1.32] - 2026-05-10
+## [0.1.29] - 2026-05-10
+
+A big release that consolidates several months of work and reshapes
+how AIMax Viewer feels day-to-day. The throughline is **agency**:
+the extension stops being just a viewer and becomes the place where
+you actually drive Claude — to inspect pages, edit artifacts, manage
+local apps, build decks, and ship presentations.
+
+### What's in it (the short version)
+
+- **Apps Manager v2** — the sidebar now manages local *and* remote
+  dev apps end-to-end: HTTP healthchecks, burst-then-slow refresh,
+  per-app context menu (Run / Stop / Open / Copy URL / Edit),
+  remote-host detection with cloud icons, optional `remote: boolean`.
+
+- **Live Annotation across any localhost port** — a single toggle
+  (`Enable Live Annotation`, on by default) routes Vite / Streamlit /
+  FastAPI / your-stack-here through the AIMax proxy and injects the
+  annotation client. Annotate any local web app the same way you
+  annotate static artifacts.
+
+- **Claude Bridge, unified** — one ✻ button in the Browser toolbar
+  opens a dropdown with Copy / Terminal / VS Code / Inline actions
+  and an explicit **Allow file edits** toggle (60s chat vs 5min
+  agent). A new menu item "Add Claude Bridge to this page (persistent)"
+  asks Claude Code to inject the bridge snippet straight into your
+  artifact's source HTML. The Annotation panel mirrors all of this
+  with `>Term` / `>VSC` / `>Run` / `Refresh`, so a click on an element
+  becomes an actionable change without copy-paste.
+
+- **Make it presentable** — a new skill (`aimax-make-presentable`)
+  and matching menu item that turns any `.md` or `.html` into an
+  AIMax-ready slide deck, asking the right questions about heading
+  splits, audience, and speaker notes. Works even if you haven't
+  installed the skill locally — falls back to fetching it from the
+  GitHub repo on the fly.
+
+- **Presenter ergonomics** — drag-to-resize the thumbnail carousel
+  (16:9 preserved), and an Agentic Save Notes button that writes
+  the speaker note you just edited back into the source HTML
+  surgically. "Present in Browser" is now always visible, disabled
+  with a reason when the file isn't a deck.
+
+- **A top-to-bottom UI pass** — shared icon-button style across
+  Annotations and Bridge, sparkle SVG everywhere instead of the
+  off-center `*` glyph, pending-state on inline buttons, dynamic
+  status text, and a fetch-based deck detector that finally works
+  past webview cross-origin.
+
+### Heads up — the extension is now doing *a lot*
+
+What started as "a clean way to view HTML/Markdown artifacts inside
+VS Code" now spans Apps Manager, Live Annotation, Claude Bridge,
+Presenter Mode, two installable skills, an HTTP API, a reverse proxy,
+inline AI agents, and several sidebar surfaces. The CHANGELOG and
+the README do their best, but the surface area has grown past what
+those alone can document well.
+
+**Looking for wiki volunteers.** If you've been using AIMax Viewer
+and want to help, I'd love contributors for a proper wiki —
+how-to guides, end-to-end recipes, troubleshooting pages, screenshots,
+short videos. Open an issue at
+[github.com/maxturazzini/aimax-viewer/issues](https://github.com/maxturazzini/aimax-viewer/issues)
+or ping `@maxturazzini` if you want to take any chunk of it.
+
+### Looking ahead
+
+Heads up: I'm considering **deprecating the Home panel** in a future
+release. Right now Home and Browser are largely a duplicate: Browser
+is more capable (annotations, Bridge, deck detection, presenter,
+agentic actions), while Home only exists because of webview technical
+limits I'm running into when trying to reconcile the two surfaces.
+The likely outcome is keeping only the Browser panel — which already
+serves the home page just fine — and retiring the dedicated Home
+view. Nothing changes in this release, this is just a heads up so
+you can mentally plan around it. Feedback welcome on the issue
+tracker if you rely on Home for something Browser can't do today.
+
+### Full details
+
+The sections below cover everything in the depth release notes can
+carry — Added / Changed / Fixed / Technical. Skim the headlines
+above; dive in here when something breaks or when you want to
+understand the *why*.
 
 ### Added
-- **`Make it presentable` menu item + `aimax-make-presentable` skill**: when the file in the Browser panel isn't a slide deck (i.e. `Present in Browser` is disabled), a new menu item appears under it. Clicking it opens Claude Code with the new `aimax-make-presentable` skill, which turns the current `.md` or `.html` into an AIMax-presentable deck (`<filename>-deck.html` next to the input). For markdown, the skill asks the user which heading level to split on (H1 / H1+H2 / H1+H2+H3 / Manual). For HTML without sections, it wraps content using existing `<h1>`/`<h2>` as boundaries. Asks audience/length/notes preferences. The skill ships in two folders (`skills/aimax-make-presentable/`, `plugins/aimax-make-presentable/`) — install once into Claude Code, OR run as-is: the menu prompt embeds a fallback that fetches the skill from GitHub raw on the fly when the slash command isn't recognized locally.
-- **Carousel resize handle (Presenter)**: drag-to-resize bar between the main area and the carousel. Dragging upward grows the carousel and scales every thumbnail proportionally (16:9 preserved by recomputing `width = height × 1280/720` and rescaling the inner iframe transform). Min height = current 72px baseline, max = 60% of viewport.
-- **`>Run` button in Annotation panel**: new action that sends the annotation prompt to Claude in agent mode (`--dangerously-skip-permissions`, 5 min budget) and renders the response in a new box below the annotation list. Annotations always run with edits enabled because their purpose is applying changes.
-- **`Refresh` button in Annotation panel**: reloads the page from inside the annotation flow without leaving the panel.
-- **`Allow file edits` checkbox in Claude Bridge dropdown**: explicit toggle controls inline behavior. Off (default) = quick chat answer with `--tools ""` + concise system prompt + 60s budget; On = full agent with `--dangerously-skip-permissions` + 5 min budget. Tooltip explains both modes.
-- **Same annotation actions on Home panel**: `>Term`, `>VSC`, `>Run`, `Refresh` now mirror the Browser panel header. The Home panel host listener now also handles `claudeBridge` postMessages, reusing the shared `handleClaudeBridge` helper.
+
+- **Apps Manager v2**: HTTP healthcheck on `healthUrl` for remote
+  apps; configurable burst-then-slow refresh
+  (`appsManager.burstDurationMs` 30000, `appsManager.burstIntervalMs`
+  3000); right-click context menu (Open in Viewer / Open External /
+  Start / Stop / Copy URL / Edit settings); cloud icon for non-local
+  hosts; optional `remote: boolean` field in the apps schema; click
+  on a stopped item now opens the URL.
+- **Toolbar Bridge button (✻)** in the Browser panel: opens a Bridge
+  dropdown with Copy / Copy & Terminal / Copy & VS Code / Ask Inline,
+  and an `Allow file edits` checkbox. Off = quick chat (`--tools ""`
+  + concise system prompt + 60s budget); On = full agent
+  (`--dangerously-skip-permissions` + 5 min budget).
+- **Hamburger menu — `Add Claude Bridge to this page (persistent)…`**:
+  on local AIMax-served HTML files, opens Claude Code to inject the
+  bridge snippet into the source via the `aimax-bridge` skill; falls
+  back to fetching the canonical template from GitHub raw if the
+  slash command isn't installed locally; clipboard fallback if Claude
+  Code isn't available. Disabled with explanatory tooltip on proxied,
+  external, or non-HTML URLs.
+- **Hamburger menu — `Make it presentable`**: appears under "Present
+  in Browser" when the file isn't a deck. Opens Claude Code with the
+  new `aimax-make-presentable` skill; for markdown asks the heading-
+  split level (H1 / H1+H2 / H1+H2+H3 / Manual); writes
+  `<filename>-deck.html` next to the input.
+- **Annotations panel — `>Term`, `>VSC`, `>Run`, `Refresh` buttons**:
+  send the constructed annotation prompt to a terminal, to Claude Code,
+  or run it inline as an agent (5 min budget) and render the response
+  in a new box below the list. `Refresh` reloads the page from inside
+  the panel.
+- **Home panel parity**: same `>Term` / `>VSC` / `>Run` / `Refresh`
+  actions on the Home panel annotation header. The Home panel host
+  listener now handles `claudeBridge` postMessages too.
+- **Presenter — carousel resize handle**: drag-to-resize bar above
+  the carousel (min 72px, max 60vh). Thumbnails scale proportionally,
+  16:9 preserved.
+- **Presenter — Agentic Save Notes**: floppy+sparkle icon in the
+  Speaker Notes header writes the currently-edited note straight back
+  into the source HTML's `<div class="speaker-notes">` for the current
+  `<section>`. Async with floating banners; per-slide `savePending`
+  state so you can queue saves on different slides concurrently.
+  Surgical Edit-by-content contract avoids touching anything else.
+- **`aimax-make-presentable` skill**: new skill in
+  `skills/aimax-make-presentable/` and `plugins/aimax-make-presentable/`.
 
 ### Changed
-- **`Present in Browser` is now always visible, disabled when not applicable**: previously the menu item disappeared (`display:none`) when the iframe content lacked `<section>` elements, hurting feature discoverability. It now stays visible and gets `disabled` + a context-specific `title` ("Not a slide deck (found N <section>, need ≥2)" / "Cross-origin content — cannot inspect for slides" / "Open this deck in the slide presenter"). New `.menu-item:disabled` CSS gives the greyed-out appearance.
-- **Annotation + Bridge button coherence**: both surfaces now share a single `.aimax-icon-btn` class (transparent background, grey border, azure `#00d4ff` icon) — they perform the same actions (Copy, send-to-Terminal, send-to-VS-Code, ask-inline), so they look identical. Replaced the colored Bridge buttons (lavender/blue/green/yellow with long labels) with icon-only ones; the Bridge actions row switched from 2-col grid to flex.
-- **Sparkle SVG replaces text `*`**: the "New Claude Code conversation" toolbar button (Browser + Home) and the Bridge "Ask Inline" button now use an 8-point Claude-style sparkle SVG centered via `viewBox`, instead of the previous superscript `*` glyph that rendered visually off-center. Icon library predisposed to host other provider marks (e.g. Codex) in a future iteration.
-- **Inline buttons disable while pending**: `Ask Inline` (Bridge) and `>Run` (Annotation) now grey out and ignore extra clicks until the result returns or the timeout fires. Prevents the user from queueing duplicate Claude invocations.
-- **Status text in Bridge while running**: shows `Running agent (up to 5 min)…` when edits are enabled, `Waiting for Claude…` otherwise, instead of the previous fixed wait message.
+
+- **`Present in Browser` is always visible**: previously hidden when
+  the iframe lacked `<section>` elements (hurting discoverability).
+  Now stays visible and gets `disabled` + a context-specific tooltip
+  ("Not a slide deck (found N <section>, need ≥2)" / "Cross-origin
+  content — cannot inspect for slides" / "Open this deck in the slide
+  presenter"). Detection moved from `frame.contentDocument` (always
+  cross-origin in webview) to a fetch-based section count via the
+  local server CORS.
+- **Annotation + Bridge button coherence**: shared `.aimax-icon-btn`
+  class — transparent background, grey border, azure `#00d4ff` icon.
+  Bridge buttons switched from coloured/labelled to icon-only.
+- **Sparkle SVG replaces text `*`**: the "New Claude Code conversation"
+  toolbar button (Browser + Home) and the Bridge "Ask Inline" button
+  use an 8-point Claude-style sparkle SVG centered via `viewBox`,
+  instead of the previous superscript `*` glyph that rendered visually
+  off-center.
+- **Bridge inline buttons disable while pending**: `Ask Inline`
+  (Bridge) and `>Run` (Annotation) grey out and ignore extra clicks
+  until the result returns or the timeout fires.
+- **Bridge `vscode` mode pre-fills the prompt**: uses the official
+  Claude Code URI handler `vscode://anthropic.claude-code/open?prompt=…`
+  (no more manual paste). Clipboard write kept as fallback for older
+  Claude Code extension versions.
+- **Bridge snippets prepend page reference**: bridge HTML snippets
+  (floating panel, inline assistant) automatically prepend
+  `Context: viewing <pathname>\n\n` to the prompt so Claude knows
+  which artifact the user is on.
+- **Distinct placeholders for bridge panels**: each panel type
+  (demo / floating / inline) has a unique placeholder text.
+- **CSP stripped on proxied HTML responses**: the reverse proxy strips
+  `content-security-policy` and `content-security-policy-report-only`
+  headers from upstream HTML responses, so inline annotation/bridge
+  scripts can run on apps with strict CSP (e.g. Streamlit). Only
+  affects HTML through `/__proxy__/PORT/`.
+- **Apps Manager — discovery cadence is slow-only**: `lsof`-based
+  discovery no longer participates in the burst window, avoiding
+  "too many open files" pressure on long sessions.
+- **Apps Manager — tooltip cleaned up**: removed status emojis;
+  plain Running/Stopped text plus a Host line.
 
 ### Fixed
-- **Carousel toggle button inverted (Presenter)**: `▤ Carousel` now lights up when the carousel is **visible** (default) and goes off when hidden, matching the convention of `Dots` and `Swap Layout`. Previously the button was active only when the carousel was hidden, and the default-on state showed an unlit button.
-- **`Exit code 143` after long inline runs**: race condition between the 120s timeout and the `close` event meant the timeout killed the child but the subsequent `close(143)` overwrote the timeout result with a misleading `Exit code 143`. The callback is now guarded by an internal `done` flag so only the first outcome wins.
-- **Inline runs hung as full agent on a chat prompt**: `claude -p` was invoked with no tool restriction and no system prompt, so a quick question like "fix the title" triggered file scans, edits, and permission prompts that hung past the 120s timeout. Chat mode now runs `claude -p --tools "" --system-prompt "concise…" --no-session-persistence -` and returns in seconds.
 
-### Technical
-- New helpers in [src/extension.ts](src/extension.ts): `httpUrlToWorkspacePath(url)` (inverse of `getHttpUrl`, returns `null` for non-local URLs) and `openMakePresentableInClaude(url)` (builds the prompt with `/aimax-make-presentable <path>` plus a fallback block instructing Claude to fetch the skill from `https://raw.githubusercontent.com/maxturazzini/aimax-viewer/main/skills/aimax-make-presentable/SKILL.md` if the slash command isn't installed). Wired into both browser webview message listeners (multi-tab + single-tab) under `command === 'makePresentable'`.
-- Browser webview detection logic refactored to a tri-state (`isDeck` / `notDeck` / `crossOrigin`). `isDeck` enables Present and hides Make-Presentable; `notDeck` disables Present (with count tooltip) and shows Make-Presentable; `crossOrigin` disables Present (with cross-origin tooltip) and hides Make-Presentable (we can't read or write a remote file).
-- `slide-presenter.html`: grid grew a row (`1fr auto auto auto`) for the new `.carousel-resize-handle` (grid-row 2). Carousel moved to row 3, bottom-bar to row 4. New `initCarouselResize()` mirrors `initResize()`/`initColResize()` with mousedown→mousemove drag (delta = `startY − e.clientY`, so up grows). New `applyCarouselItemSize()` and module-level `carouselItemWidth/Height` so `buildCarousel()` honors the user-chosen size on rebuild. `toggleCarousel` also toggles the handle's `.hidden` class so it disappears with the carousel.
-- `src/extension.ts:84` — `handleClaudeBridge` signature gained `opts?: { allowEdits?: boolean }`. The `print` branch now builds `args` dynamically: chat mode adds `--tools ""` + `--system-prompt`, edit mode adds `--dangerously-skip-permissions`. Timeout is `60_000` (chat) or `300_000` (edit). Internal `done` flag in `finish()` prevents double-callback when timeout and `close` race.
-- All four call sites updated to forward `allowEdits`: multi-tab webview, single-tab webview, home panel, `/__claude` HTTP endpoint (which now also accepts `allowEdits` in the JSON body and returns `504` for any `Timeout (Ns)` string, not only the previously-hardcoded `Timeout (120s)`).
-- Shared `.aimax-icon-btn` CSS added in two places (browser webview ~line 1322, home wrapper ~line 2792) — same rules to keep coherence visible. New `.bridge-allow-edits` CSS for the toggle row. Removed obsolete `.bridge-btn-copy/term/vsc/inline` classes.
-- New JS state: `bridgeInlinePending` (browser), `annotRunPending` (browser), `aimaxAnnotRunPending` (home). The browser `aimaxBridgeOnResult` routes `print` results into `#annotResponse` when `>Run` was pending, otherwise into `#bridgeResponse`; in both cases re-enables both buttons.
-- `bridge-panel.ts` standalone (proxy-injected Bridge): intentionally untouched in this release. Will get the same coherence + `allowEdits` toggle in a follow-up if desired.
+- **Apps Manager — status detection on remote apps**: now reports
+  Running/Stopped from an HTTP healthcheck against `healthUrl`, not
+  `lsof`. Apps on `http://minimacs.local:5001/` are correctly
+  detected.
+- **Apps Manager — unsafe stop on remote apps**: previously fell back
+  to `killByPort` on the local machine, killing whichever local
+  process happened to listen on the same port. Stop is now refused
+  for remote apps unless an explicit `stopCmd` is configured.
+- **Apps Manager — `getPortsInUse` race**: parallel callers no longer
+  return an empty cache while a query is in flight; they await the
+  same in-flight Promise.
+- **Bridge `Exit code 143` after long inline runs**: race condition
+  between the inline timeout and the `close` event made the timeout
+  result get overwritten by the subsequent `close(143)`. Now guarded
+  by an internal `done` flag so only the first outcome wins.
+- **Bridge inline runs hung as full agent on a chat prompt**: `claude
+  -p` was invoked with no tool restriction, so a quick question
+  triggered file scans, edits, and permission prompts that hung past
+  the timeout. Chat mode now runs `claude -p --tools "" --system-
+  prompt "concise…" --no-session-persistence -` and returns in seconds.
+- **Carousel toggle button polarity (Presenter)**: `▤ Carousel` lights
+  up when the carousel is **visible** (default) and goes off when
+  hidden, matching `Dots` and `Swap Layout`.
 
----
+### Technical (high-signal)
 
-## [0.1.31] - 2026-05-09
-
-### Fixed
-- **Apps Manager status detection**: configured apps now report Running/Stopped based on an HTTP healthcheck against `healthUrl`, not on local `lsof`. Apps running on a different host (e.g. `http://minimacs.local:5001/`) are now correctly detected. Locally-running apps are still picked up via lsof for PID/uptime metadata.
-- **Apps Manager unsafe stop on remote apps**: previously, hitting Stop on an app whose `healthUrl` pointed to a remote host fell back to `killByPort` on the local machine, killing whichever local process happened to listen on the same port. Stop is now refused for remote apps unless an explicit `stopCmd` is configured, with a clear error message.
-- **Apps Manager click on stopped item did nothing**: items now always have a click action that opens the URL in the AIMax Viewer browser panel. If the app is unreachable, the iframe surfaces the connection error instead of failing silently.
-- **Apps Manager `getPortsInUse` race**: parallel callers no longer return an empty cache while a query is in flight; they now await the same in-flight Promise.
-
-### Added
-- **Burst-then-slow refresh**: Apps Manager status checks run every `burstIntervalMs` (default 3000) for the first `burstDurationMs` (default 30000) after activation or a manual refresh, then settle to the user-configured `refreshInterval`. Two new settings expose this:
-  - `aimaxViewer.appsManager.burstDurationMs` (default 30000, 0 disables burst)
-  - `aimaxViewer.appsManager.burstIntervalMs` (default 3000)
-- **Right-click context menu on apps tree**: each configured app now exposes Open in AIMax Viewer / Open in External Browser / Start App or Stop App / Copy URL / Edit in settings.json. Inline ▶/⏹ icons remain on the row.
-- **Cloud icon for remote apps**: configured apps whose `healthUrl` is non-local render with `cloud` (running) / `cloud-outline` (stopped) instead of the filled circle, making the host distinction visible at a glance. Tooltip now includes a `Host:` line.
-- **Optional `remote: boolean` field** in `aimaxViewer.appsManager.apps[]` schema. If omitted, it is auto-derived from the host of `healthUrl`. When true, AIMax never runs `lsof` or kills local processes for that app.
-
-### Changed
-- **Discovery cadence is slow-only**: lsof-based discovery of running services no longer participates in the burst window. It runs only at `refreshInterval`, avoiding "too many open files" pressure on long sessions.
-- **Tooltip cleaned up**: removed status emojis (🟢/🔴) for consistency; replaced with plain Running/Stopped text plus the new Host line.
-
-### Technical
-- `src/apps-manager.ts`: new `isRemoteApp()` helper, `getStatus()` rewritten to use parallel `checkHealth()` calls (timeout reduced 2000→1500 ms with proper socket drain), `_portsQueryRunning: boolean` replaced by `_portsQueryInflight: Promise<...> | null`, `stopApp()` guarded against remote.
-- `src/apps-tree-provider.ts`: split single `refreshTimer` into independent `statusTimer` (HTTP) and `discoveryTimer` (lsof); `startBurst()` swaps the status timer cadence and is also called by `refresh()`. Context values extended with `app-running-remote` / `app-stopped-remote`.
-- `src/extension.ts`: 4 new commands `aimaxViewer.openAppInViewer`, `aimaxViewer.openAppInBrowser`, `aimaxViewer.copyAppUrl`, `aimaxViewer.editAppInSettings`. `AppsTreeProvider` constructor now takes burst settings.
-- `package.json`: new commands, settings, schema, and `view/item/context` regex-matched entries grouped as `1_open` / `2_lifecycle` / `3_meta`.
-
----
-
-## [0.1.30] - 2026-05-09
-
-### Added
-- **Live Inspect toggle**: New `aimaxViewer.liveInspect.enabled` setting (default `true`) controls whether external localhost URLs are routed through the AIMax reverse proxy. When on, Annotation Mode and Claude Bridge can be injected into dev-server pages (Vite, Streamlit, FastAPI…). When off, apps load directly with no injection. Toggle is also available in the hamburger menu of the Browser panel.
-- **Auto Claude Bridge injection in proxied pages**: When Live Inspect is enabled and `aimaxViewer.liveInspect.injectBridge` is `true` (default), the Claude Bridge floating panel is automatically injected into every proxied HTML response, alongside the annotation client. Any local web app gains a "Send to Claude" button without source-code changes.
-- **Bridge button in Browser toolbar**: New round blue button in the Browser panel toolbar (controlled by `aimaxViewer.bridge.toolbarButton`, default `true`) opens a Claude Bridge dropdown with textarea + Copy / Terminal / VS Code / Inline actions. Lives in the webview chrome — works for any URL, file or app, independently of the proxy.
-- **Annotation send-to-Claude actions**: Annotation panel header now has `>Term` and `>VSC` buttons next to `Copy` and `Clear`, sending the annotation prompt directly to a terminal or to Claude Code without copy-paste.
-- **Hamburger menu reorganized**: Now contains 4 grouped sections — page actions (Reload, Annotation Mode), URL actions (Copy URL, Present), `Open *` group (Terminal, Claude Code, External Browser, Current Editor File, Home), and Live Inspect toggles. Toolbar buttons are duplicated in the menu for accessibility (except `←` `→` navigation).
-
-### Changed
-- **CSP stripped on proxied HTML responses**: The reverse proxy now strips `content-security-policy` and `content-security-policy-report-only` headers from upstream HTML responses. Required for inline annotation/bridge scripts to run on apps with strict CSP (e.g. Streamlit). Only affects HTML through `/__proxy__/PORT/`.
-
-### Technical
-- New `src/bridge-panel.ts` exporting `injectBridgePanel(html)` and `BRIDGE_PANEL_HTML_PROXY` (mirrors `annotation-client.ts` pattern). Uses distinct id prefix `aimax-bridge-px-` to avoid collisions with skill-injected bridges.
-- `src/extension.ts:45-` — extracted `/__claude` core logic into reusable `handleClaudeBridge(mode, prompt, callback)` helper, called by both the HTTP endpoint and the toolbar bridge dropdown.
-- Toolbar Bridge dropdown communicates with the extension host via `vscode.postMessage({ command: 'claudeBridge', mode, prompt })`; the result is delivered back via `panel.webview.postMessage({ command: 'bridgeResult', ... })`.
-- Toggle items in the hamburger menu persist their state in workspace `settings.json` via `vscode.workspace.getConfiguration().update(..., ConfigurationTarget.Workspace)`.
-
----
-
-## [0.1.29] - 2026-05-09
-
-### Fixed
-- **Claude Bridge `vscode` mode now pre-fills the prompt**: previously `mode: 'vscode'` only copied the prompt to the clipboard and opened a new Claude Code conversation, leaving the user to paste manually. The endpoint now uses the official Claude Code URI handler `vscode://anthropic.claude-code/open?prompt=…` (documented at code.claude.com/docs/en/vs-code) which pre-fills the prompt box automatically. Clipboard write is kept as a fallback for older Claude Code extension versions.
-
-### Changed
-- **Bridge snippets now include page reference**: all bridge HTML snippets (floating panel, inline assistant, demo) automatically prepend `Context: viewing <pathname>\n\n` to the prompt before sending. Gives Claude immediate awareness of which artifact the user is on, with no extra UI.
-- **Distinct placeholders for bridge panels**: each panel type (demo main / floating / inline) now has a unique placeholder text, helping users tell them apart when more than one is visible on the same page.
-
-### Technical
-- `src/extension.ts:1728-1750` — `mode === 'vscode'` branch rewritten to use `vscode.env.openExternal` with the Claude Code URI handler.
-- Snippet edits applied to both `skills/aimax-bridge/` and `plugins/aimax-bridge/` (verified identical with `diff -r`).
+- `src/extension.ts` — `handleClaudeBridge(mode, prompt, callback,
+  opts?)` reusable helper called from HTTP `/__claude`, the toolbar
+  Bridge dropdown, the Annotation `>Run` button, and the Presenter
+  Save-Notes flow. The `print` branch builds `args` dynamically: chat
+  mode adds `--tools ""` + `--system-prompt`, edit mode adds
+  `--dangerously-skip-permissions`. Timeout 60s (chat) / 300s (edit).
+  Internal `done` flag prevents double-callback on timeout/close race.
+- New helpers: `httpUrlToWorkspacePath(url)` (inverse of `getHttpUrl`,
+  null for non-local URLs), `urlToWorkspacePath(url)` (filters
+  `__proxy__` / `__presenter` / `api/`, requires `.html`),
+  `openMakePresentableInClaude(url)`, `buildBridgeInjectionPrompt(rel)`,
+  `dispatchAddBridgeToPage(url)`. All wired into both browser-panel
+  message listeners.
+- Browser webview detection refactored to a tri-state (`isDeck` /
+  `notDeck` / `crossOrigin`) via fetch-based section count. CORS-
+  permissive local server + webview CSP `connect-src 127.0.0.1:*`
+  make the fetch work without same-origin iframe access.
+- New menu items wired with disabled-state CSS (`.menu-item:disabled`).
+  Visibility checks for Make-Presentable + Add-Bridge are URL-based —
+  no fetch, no iframe DOM access — so cross-origin pages never break
+  the menu.
+- `slide-presenter.html`: grid grew a row for the carousel resize
+  handle; per-slide `savePending` state; surgical Edit-by-content
+  contract for Save Notes (refetch deck `cache:'no-store'`, regex-
+  extract exact `.speaker-notes` block on raw HTML, verify single
+  occurrence, send Claude a literal old→new Edit with prompt-level
+  prohibition of Read/Grep/Glob/Bash/Write).
+- `src/apps-manager.ts`: new `isRemoteApp()` helper, `getStatus()`
+  rewritten with parallel `checkHealth()` calls (timeout 1500 ms),
+  `_portsQueryInflight: Promise<...> | null` replaces the racy
+  boolean, `stopApp()` guarded against remote.
+- `src/apps-tree-provider.ts`: split `refreshTimer` into independent
+  `statusTimer` (HTTP) and `discoveryTimer` (lsof); `startBurst()`
+  swaps the status timer cadence; context values extended with
+  `app-running-remote` / `app-stopped-remote`.
+- `package.json`: 4 new commands (`openAppInViewer`,
+  `openAppInBrowser`, `copyAppUrl`, `editAppInSettings`); new
+  settings (`appsManager.burstDurationMs`,
+  `appsManager.burstIntervalMs`); apps schema + `view/item/context`
+  regex entries grouped as `1_open` / `2_lifecycle` / `3_meta`.
+- `aimax-bridge` skill in `skills/` and `plugins/` (canonical source
+  for the bridge snippet, used by the persistent injection menu item).
+- `aimax-make-presentable` skill in `skills/` and `plugins/`.
+- `Artifacts/` is tracked again (was un-tracked in 8c1f0ca) — now
+  serves as a living showcase: presentation deck, Claude Bridge demo,
+  English guide, and 13 deck screenshots.
 
 ---
 
