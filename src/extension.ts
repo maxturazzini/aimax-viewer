@@ -5,6 +5,7 @@ import * as http from 'http';
 import { execFile, spawn } from 'child_process';
 import { parseMarkdown, wrapMarkdownHtml, extractFrontmatter } from './markdown-parser';
 import { ANNOTATION_CLIENT_JS, injectAnnotationClient } from './annotation-client';
+import { injectLinkHandler } from './link-handler-client';
 import { ArtifactsTreeProvider, ArtifactsWebviewProvider, ArtifactItem, FolderConfig } from './treeview-provider';
 import { RecentsWebviewProvider } from './recents-provider';
 import { AppsManager } from './apps-manager';
@@ -640,6 +641,78 @@ export function activate(context: vscode.ExtensionContext) {
         }
     });
 
+    // Add a folder from explorer to aimaxViewer.browser.folders (workspace settings)
+    const addFolderToViewerCommand = vscode.commands.registerCommand('aimaxViewer.addFolderToViewer', async (uri: vscode.Uri) => {
+        if (!uri || !uri.fsPath) {
+            vscode.window.showWarningMessage('No folder selected');
+            return;
+        }
+        let stat: fs.Stats;
+        try {
+            stat = fs.statSync(uri.fsPath);
+        } catch {
+            vscode.window.showWarningMessage('Folder does not exist');
+            return;
+        }
+        if (!stat.isDirectory()) {
+            vscode.window.showWarningMessage('Selected item is not a folder');
+            return;
+        }
+        const ws = vscode.workspace.getWorkspaceFolder(uri) || (workspaceFolder ? { uri: vscode.Uri.file(workspaceFolder) } as vscode.WorkspaceFolder : undefined);
+        if (!ws) {
+            vscode.window.showWarningMessage('No workspace open — cannot save folder');
+            return;
+        }
+        const relPath = path.relative(ws.uri.fsPath, uri.fsPath);
+        if (!relPath || relPath.startsWith('..') || path.isAbsolute(relPath)) {
+            vscode.window.showWarningMessage('Folder must be inside the current workspace');
+            return;
+        }
+        const suggested = path.basename(uri.fsPath);
+        const config = vscode.workspace.getConfiguration('aimaxViewer');
+        const existing = config.get<FolderConfig[]>('browser.folders', []) || [];
+        if (existing.some(f => f.path === relPath)) {
+            vscode.window.showInformationMessage(`"${relPath}" is already in AIMax Viewer`);
+            return;
+        }
+        const label = await vscode.window.showInputBox({
+            prompt: 'Alias for this folder in AIMax Viewer',
+            value: suggested,
+            placeHolder: suggested,
+            validateInput: v => v && v.trim().length > 0 ? null : 'Alias cannot be empty'
+        });
+        if (!label) return;
+        const next: FolderConfig[] = [...existing, { label: label.trim(), path: relPath }];
+        try {
+            await config.update('browser.folders', next, vscode.ConfigurationTarget.Workspace);
+        } catch (err: any) {
+            vscode.window.showErrorMessage(`Failed to update settings: ${err?.message || err}`);
+            return;
+        }
+        if (treeProvider) treeProvider.refresh();
+        if (webviewProvider) webviewProvider.refresh();
+        vscode.window.showInformationMessage(`Added "${label.trim()}" → ${relPath} to AIMax Viewer`);
+    });
+
+    // Open a folder in a new VS Code window
+    const openFolderInNewWindowCommand = vscode.commands.registerCommand('aimaxViewer.openFolderInNewWindow', (uri: vscode.Uri) => {
+        if (!uri || !uri.fsPath) {
+            vscode.window.showWarningMessage('No folder selected');
+            return;
+        }
+        try {
+            const stat = fs.statSync(uri.fsPath);
+            if (!stat.isDirectory()) {
+                vscode.window.showWarningMessage('Selected item is not a folder');
+                return;
+            }
+        } catch {
+            vscode.window.showWarningMessage('Folder does not exist');
+            return;
+        }
+        vscode.commands.executeCommand('vscode.openFolder', uri, { forceNewWindow: true });
+    });
+
     // Command: Open new terminal
     const openTerminalCommand = vscode.commands.registerCommand('aimaxViewer.openTerminal', () => {
         vscode.commands.executeCommand('workbench.action.terminal.new');
@@ -741,6 +814,8 @@ export function activate(context: vscode.ExtensionContext) {
         openCurrentFileCommand,
         openFileInViewerCommand,
         presentFileCommand,
+        addFolderToViewerCommand,
+        openFolderInNewWindowCommand,
         openTerminalCommand,
         openClaudeCodeCommand,
         openArtifactsBrowserCommand,
@@ -964,6 +1039,8 @@ function openInBrowser(url: string, customTitle?: string) {
                 vscode.env.clipboard.writeText(message.text || '');
             } else if (message.command === 'openExternal' && message.url) {
                 vscode.env.openExternal(vscode.Uri.parse(message.url));
+            } else if (message.command === 'openInBrowser' && message.url) {
+                openInBrowser(message.url);
             } else if (message.command === 'updateTitle' && message.title) {
                 newPanel.title = message.title;
             } else if (message.command === 'openCurrentFile') {
@@ -1020,6 +1097,8 @@ function openInBrowser(url: string, customTitle?: string) {
                 vscode.env.clipboard.writeText(message.text || '');
             } else if (message.command === 'openExternal' && message.url) {
                 vscode.env.openExternal(vscode.Uri.parse(message.url));
+            } else if (message.command === 'openInBrowser' && message.url) {
+                openInBrowser(message.url);
             } else if (message.command === 'updateTitle' && message.title) {
                 if (browserPanel) {
                     browserPanel.title = message.title;
@@ -2384,6 +2463,8 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
                 vscode.postMessage({ command: 'presentFile', url: event.data.url });
             } else if (event.data?.command === 'openExternal' && event.data.url) {
                 vscode.postMessage({ command: 'openExternal', url: event.data.url });
+            } else if (event.data?.command === 'openInBrowser' && event.data.url) {
+                vscode.postMessage({ command: 'openInBrowser', url: event.data.url });
             }
         });
 
@@ -2578,6 +2659,7 @@ function startHttpServer(workspaceFolder: string) {
                         html = baseTag + html;
                     }
                     html = injectAnnotationClient(html);
+                    html = injectLinkHandler(html);
                     res.writeHead(proxyRes.statusCode || 200, outHeaders as http.OutgoingHttpHeaders);
                     res.end(html);
                 });
@@ -2593,9 +2675,15 @@ function startHttpServer(workspaceFolder: string) {
         // Root-relative fallback: if request comes from a proxied page (Referer header
         // points to /__proxy__/PORT/...) and the path is not a workspace file, redirect
         // through the proxy. Handles apps that fetch /api/foo or load /assets/x.js.
+        //
+        // Reserved AIMax endpoints (/__proxy__/, /__*, AIMax's own /api/*) are never
+        // forwarded. App-owned /api/* paths (e.g. /api/quotes from sales-app) ARE
+        // forwarded — these are the paths the proxied app expects to handle itself.
         const referer = String(req.headers['referer'] || '');
         const refMatch = referer.match(/\/__proxy__\/(\d+)\//);
-        if (refMatch && !url.startsWith('/__proxy__/') && !url.startsWith('/api/') && !url.startsWith('/__')) {
+        const aimaxOwnedPaths = new Set(['/api/artifacts', '/api/apps', '/api/identity', '/api/ports']);
+        const urlPathOnly = url.split('?')[0];
+        if (refMatch && !url.startsWith('/__proxy__/') && !url.startsWith('/__') && !aimaxOwnedPaths.has(urlPathOnly)) {
             res.writeHead(302, {
                 'Location': `/__proxy__/${refMatch[1]}${url}`,
                 'Access-Control-Allow-Origin': '*'
@@ -2784,7 +2872,7 @@ function startHttpServer(workspaceFolder: string) {
                 }
                 const { content, metadata } = extractFrontmatter(rawContent);
                 const title = (metadata?.title as string) || path.basename(filePath, ext).replace(/_/g, ' ');
-                const html = injectAnnotationClient(wrapMarkdownHtml(parseMarkdown(content), title, metadata));
+                const html = injectLinkHandler(injectAnnotationClient(wrapMarkdownHtml(parseMarkdown(content), title, metadata)));
                 res.writeHead(200, {
                     'Content-Type': 'text/html; charset=utf-8',
                     'Access-Control-Allow-Origin': '*'
@@ -2813,7 +2901,7 @@ function startHttpServer(workspaceFolder: string) {
                 'Access-Control-Allow-Headers': 'Content-Type'
             };
             if ((ext === '.html' || ext === '.htm') && !isRaw) {
-                const injected = injectAnnotationClient(data.toString('utf-8'));
+                const injected = injectLinkHandler(injectAnnotationClient(data.toString('utf-8')));
                 res.writeHead(200, headers);
                 res.end(injected);
             } else {

@@ -2,6 +2,46 @@
 
 All notable changes to the AIMax Viewer extension will be documented in this file.
 
+## [0.1.31] - 2026-05-12
+
+### Added
+
+- **Explorer context menu on folders**: right-click any folder in the VS Code Explorer to get two new actions.
+  - **"Add to AIMax Viewer"** — prompts for an alias (defaults to the folder basename), then appends `{label, path}` to `aimaxViewer.browser.folders` in workspace settings (`.vscode/settings.json`). The sidebar Artifacts tree refreshes immediately. Rejects folders outside the workspace and silently skips duplicates (matched by relative path).
+  - **"Open this Folder in a New Window"** — opens the folder in a fresh VS Code window via the built-in `vscode.openFolder` command with `forceNewWindow: true`. Useful for quickly switching context to a sibling project without losing the current workspace.
+
+### Changed
+
+- **"Open in AIMax Viewer" now appears on `.md` files**: the command handler already supported markdown but the explorer context-menu `when` clause was scoped to `resourceExtname == .html`, so the entry never showed up for `.md`. Fixed — now visible on both `.html` and `.md`. Folder-only entries are gated by `explorerResourceIsFolder` so file and folder menus stay clean.
+- **Default `aimaxViewer.browser.folders` now points to the workspace root** (`{ label: "Workspace", path: "." }`) instead of `Artifacts/`. Cross-platform via Node's `path.join` (works on Windows, Mac, Linux). Only applies to users who never customized the setting — existing custom values are preserved by VS Code's settings system.
+- **Welcome card wording softened** in `Artifacts/index.html`: from "AI, MAX Viewer looks for a `Artifacts/` folder..." to "AI, MAX Viewer suggest you to setup an `Artifacts/` folder... to display HTML and md Artifacts." Same actionable info, less alarming tone.
+
+### Fixed
+
+- **External and custom-protocol links were dead inside the iframe browser**: in `aimaxViewer.startup.mode = "browser"`, VS Code silently drops `window.open()`, `target="_blank"`, and navigations to `vscode://` / `obsidian://` / `mailto:` / `tel:` from inside the webview's iframe. Clicks on `<a>` tags in `Artifacts/index.html` (and every other artifact) did nothing. The webview parent already listened for `{command:'openExternal', url}` and routed it to `vscode.env.openExternal()` — but the iframe side that should send the message was missing.
+
+### Added
+
+- **`link-handler-client.ts`**: tiny client script (analogous to `annotation-client.ts`) injected into every HTML/Markdown response served by the internal HTTP server (direct file, proxied app, markdown render). Intercepts `<a>` clicks AND `window.open()` calls so embedded apps that ship absolute-URL links or script-driven popups (e.g. `<a href="quote-detail.html?id=X" target="_blank">`, `window.open('detail.html', '_blank')`) behave like a real browser instead of being silently dropped by VS Code's webview. Routing works on the resolved absolute URL:
+  - `vscode:`/`obsidian:`/`mailto:`/`tel:` → `vscode.env.openExternal`.
+  - Same-origin `http(s)` (plain click, with or without `target="_blank"`) → in-place iframe navigation. The user UX for an embedded app is "show the next view here", not "spawn a new pane".
+  - Same-origin `http(s)` with **Cmd/Ctrl/Shift-click or middle-click** → new AIMax pane via `openInBrowser()`. Standard browser "open in new tab" convention.
+  - Cross-origin `http(s)` to `localhost:PORT` where we are inside `/__proxy__/PORT/...` → URL is rewritten to the proxy path and the iframe navigates same-origin. Keeps the app inside its proxy (so annotation/link-handler injection continues to work) even when the app uses absolute URLs like `http://localhost:8766/quote/123`.
+  - Other `http(s)` to `localhost`/`127.0.0.1`/`::1` → `openInBrowser()` (a different local app: new AIMax pane). Proxy/direct loading remains controlled by `aimaxViewer.liveInspect.skipHosts`.
+  - Other `http(s)` → `vscode.env.openExternal` (system browser).
+  - `#anchor`, relative paths, empty href → NOT intercepted.
+  - `window.open(url, ...)` calls are shimmed and treated as in-place navigation.
+  - No-op when `window.parent === window` (Home Panel has its own link handler in `wrapWithToolbarAndLinkHandler`).
+  - Listener runs in bubble phase so annotation mode's capture-phase handler can still suppress link clicks while annotating. Also listens to `auxclick` for middle-button.
+
+### Technical
+
+- Injection added at three points in `src/extension.ts`: proxy response (`/__proxy__/PORT/...`), markdown-to-HTML render path, and direct HTML file path. Same three points where `injectAnnotationClient` already runs.
+- Parent webview message router gains an `openInBrowser` forward alongside the existing `openExternal`; both browser-panel `onDidReceiveMessage` handlers (multi-tab and single-tab) gain a matching command that calls `openInBrowser(url)`.
+- No changes required in individual artifacts. No regressions in Home Panel.
+
+---
+
 ## [0.1.30] - 2026-05-10
 
 Patch release. No functional changes.

@@ -519,7 +519,7 @@ AI, Max Viewer is a VS Code extension that lets you view HTML and Markdown artif
 Built specifically for AI-powered workflows.
 (Note. Use emphasis when talking :-) )
 </div>
-        <div class="slide-num">1 / 15</div>
+        <div class="slide-num">1 / 16</div>
     </section>
 
     <!-- ====================================================== -->
@@ -552,7 +552,7 @@ Built specifically for AI-powered workflows.
             used to do five. The rest of this deck is about the surfaces that make
             that loop possible.
         </div>
-        <div class="slide-num">2 / 15</div>
+        <div class="slide-num">2 / 16</div>
     </section>
 
     <!-- ====================================================== -->
@@ -598,7 +598,7 @@ Built specifically for AI-powered workflows.
             content surface could be reused across creation, review, and delivery.
             The next 10 slides take each pillar apart.
         </div>
-        <div class="slide-num">3 / 15</div>
+        <div class="slide-num">3 / 16</div>
     </section>
 
     <!-- ====================================================== -->
@@ -632,7 +632,7 @@ Built specifically for AI-powered workflows.
             don't have to mash all your artifacts into one folder; point AIMax at three
             different folders and they all coexist in the dropdown and TreeView.
         </div>
-        <div class="slide-num">4 / 15</div>
+        <div class="slide-num">4 / 16</div>
     </section>
 
     <!-- ====================================================== -->
@@ -671,7 +671,7 @@ Built specifically for AI-powered workflows.
             box right under the annotation list. The same panel is mirrored on the
             Home view, so the workflow works on landing pages too.
         </div>
-        <div class="slide-num">5 / 15</div>
+        <div class="slide-num">5 / 16</div>
     </section>
 
     <!-- ====================================================== -->
@@ -721,7 +721,7 @@ http://127.0.0.1:3125/__proxy__/5173/page
             with the next slide — once you can annotate any dev app, you also want to
             run / stop / inspect them from the same sidebar.
         </div>
-        <div class="slide-num">6 / 15</div>
+        <div class="slide-num">6 / 16</div>
     </section>
 
     <!-- ====================================================== -->
@@ -765,11 +765,59 @@ http://127.0.0.1:3125/__proxy__/5173/page
             with the previous slide (Live Annotation), this means: spin up an app from
             here, then annotate it through the proxy — both surfaces are AIMax.
         </div>
-        <div class="slide-num">7 / 15</div>
+        <div class="slide-num">7 / 16</div>
     </section>
 
     <!-- ====================================================== -->
-    <!-- Slide 8 — Pillar 3a: Bridge in toolbar                   -->
+    <!-- Slide 8 — Right-click everywhere                        -->
+    <!-- ====================================================== -->
+    <section>
+        <div class="slide">
+            <span class="badge new">NEW</span>
+            <span class="badge">UX · DISCOVERABILITY</span>
+            <h2>Right-click is <span class="text-green">everywhere</span> — VS Code Explorer + AIMax sidebar</h2>
+            <ul>
+                <li><strong>Folder in Explorer →</strong> <code>Add to AIMax Viewer</code> (asks for an alias, writes to <code>aimaxViewer.browser.folders</code> in workspace settings) and <code>Open this Folder in a New Window</code>.</li>
+                <li><strong>File in Explorer (<code>.html</code> / <code>.md</code>) →</strong> <code>Open in AIMax Viewer</code> and, for HTML, <code>Present with AIMax Viewer</code>.</li>
+                <li><strong>Recents in AIMax sidebar →</strong> Open in Viewer / Editor / Browser / Present, Reveal in Explorer / Finder, Remove from Recents.</li>
+                <li><strong>Apps Manager item →</strong> Start / Stop / Open / Copy URL / Edit settings.json <em>(previous slide)</em>.</li>
+            </ul>
+            <div class="shot-pair">
+                <div>
+                    <img class="shot" src="_assets/presentation/aimax-explorer-folder-menu.png" alt="VS Code Explorer right-click on a folder showing 'Add to AIMax Viewer' and 'Open this Folder in a New Window'">
+                    <p class="shot-caption">VS Code Explorer — folder right-click</p>
+                </div>
+                <div>
+                    <img class="shot" src="_assets/presentation/aimax-recents-context-menu.png" alt="AIMax Viewer Recents right-click menu with Open in Viewer / Editor / Browser / Present / Reveal / Remove">
+                    <p class="shot-caption">AIMax sidebar — Recents right-click</p>
+                </div>
+            </div>
+        </div>
+        <div class="speaker-notes">
+            Discoverability is a quiet feature. We added contextual right-click
+            actions wherever a user would naturally hover. Inside VS Code's
+            Explorer, right-clicking a folder now lets you register it as an
+            AIMax artifact source in one click — it prompts for an alias (default
+            is the folder name) and writes the entry to
+            `aimaxViewer.browser.folders` in `.vscode/settings.json`, so it's
+            committable and shared with the team. The Artifacts tree refreshes
+            immediately. The "Open this Folder in a New Window" entry is a tiny
+            but high-value shortcut to swap context to a sibling project without
+            losing the current workspace. On `.html` and `.md` files, the
+            existing "Open in AIMax Viewer" / "Present with AIMax Viewer" entries
+            stay where you expect them — and yes, `.md` was finally added to the
+            menu condition (it was a one-line `when` clause fix). Inside the
+            AIMax sidebar itself, the Recents panel has its own rich context
+            menu with seven actions covering view, edit, present, reveal and
+            cleanup. Combined with the Apps Manager menu from the previous
+            slide, the rule of thumb becomes: if you can see it, you can
+            right-click it. No hidden command palette dance.
+        </div>
+        <div class="slide-num">8 / 16</div>
+    </section>
+
+    <!-- ====================================================== -->
+    <!-- Slide 9 — Pillar 3a: Bridge in toolbar                   -->
     <!-- ====================================================== -->
     <section>
         <div class="slide">
@@ -810,7 +858,7 @@ http://127.0.0.1:3125/__proxy__/5173/page
             because "asking a question" is more common than "asking for a fix", but
             the path to the latter is one click away. Status text reflects the mode.
         </div>
-        <div class="slide-num">8 / 15</div>
+        <div class="slide-num">9 / 16</div>
     </section>
 
     <!-- ====================================================== -->
@@ -868,7 +916,7 @@ http://127.0.0.1:3125/__proxy__/5173/page
             interactive — not just slides showing what the tool does, but the tool
             itself running in the slide.
         </div>
-        <div class="slide-num">9 / 15</div>
+        <div class="slide-num">10 / 16</div>
     </section>
 
     <!-- ====================================================== -->
@@ -923,7 +971,7 @@ Content-Type: application/json
             skills directory, `plugins/` for the plugin-style directory — so users
             can pick whichever install path matches their setup.
         </div>
-        <div class="slide-num">10 / 15</div>
+        <div class="slide-num">11 / 16</div>
     </section>
 
     <!-- ====================================================== -->
@@ -970,7 +1018,7 @@ Content-Type: application/json
             fullscreen, T for timer. The next slide will show two new presenter
             features that pushed it from "good demo" to "actually used in production".
         </div>
-        <div class="slide-num">11 / 15</div>
+        <div class="slide-num">12 / 16</div>
     </section>
 
     <!-- ====================================================== -->
@@ -1022,7 +1070,7 @@ Content-Type: application/json
             tool prohibitions. Async banners track each save independently so you can
             keep navigating while edits go through.
         </div>
-        <div class="slide-num">12 / 15</div>
+        <div class="slide-num">13 / 16</div>
     </section>
 
     <!-- ====================================================== -->
@@ -1076,7 +1124,7 @@ Content-Type: application/json
             a fallback: WebFetch the skill from GitHub raw, run it inline, tell the
             user how to install it permanently for next time. First run always works.
         </div>
-        <div class="slide-num">13 / 15</div>
+        <div class="slide-num">14 / 16</div>
     </section>
 
     <!-- ====================================================== -->
@@ -1124,7 +1172,7 @@ vscode://aimax.aimax-viewer/openCurrentFile</code></pre>
             pattern means even if a user hasn't installed a skill, the menu items
             still work the first time. AI-friendly defaults all the way down.
         </div>
-        <div class="slide-num">14 / 15</div>
+        <div class="slide-num">15 / 16</div>
     </section>
 
     <!-- ====================================================== -->
@@ -1199,7 +1247,7 @@ cp -r skills/aimax-make-presentable ~/.claude/skills/</code></pre>
             in 10 minutes"), troubleshooting pages, screenshots, short screencasts.
             Open an issue, tag it `wiki`, and pick a chunk. Thanks for watching.
         </div>
-        <div class="slide-num">15 / 15</div>
+        <div class="slide-num">16 / 16</div>
     </section>
 
     <!-- ====================================================== -->

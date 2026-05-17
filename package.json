@@ -2,7 +2,7 @@
   "name": "aimax-viewer",
   "displayName": "AIMax Viewer",
   "description": "Auto-open Artifacts at startup + internal browser for localhost",
-  "version": "0.1.30",
+  "version": "0.1.31",
   "publisher": "maxturazzini",
   "icon": "icon.png",
   "repository": {
@@ -114,6 +114,14 @@
         "command": "aimaxViewer.clearRecents",
         "title": "Clear Recents",
         "icon": "$(clear-all)"
+      },
+      {
+        "command": "aimaxViewer.addFolderToViewer",
+        "title": "Add to AIMax Viewer"
+      },
+      {
+        "command": "aimaxViewer.openFolderInNewWindow",
+        "title": "Open this Folder in a New Window"
       }
     ],
     "viewsContainers": {
@@ -152,12 +160,22 @@
       "explorer/context": [
         {
           "command": "aimaxViewer.openFileInViewer",
-          "when": "resourceExtname == .html",
+          "when": "!explorerResourceIsFolder && (resourceExtname == .html || resourceExtname == .md)",
           "group": "navigation"
         },
         {
           "command": "aimaxViewer.presentFile",
-          "when": "resourceExtname == .html",
+          "when": "!explorerResourceIsFolder && resourceExtname == .html",
+          "group": "navigation"
+        },
+        {
+          "command": "aimaxViewer.addFolderToViewer",
+          "when": "explorerResourceIsFolder",
+          "group": "navigation"
+        },
+        {
+          "command": "aimaxViewer.openFolderInNewWindow",
+          "when": "explorerResourceIsFolder",
           "group": "navigation"
         }
       ],
@@ -323,8 +341,8 @@
           "type": "array",
           "default": [
             {
-              "label": "Artifacts",
-              "path": "Artifacts"
+              "label": "Workspace",
+              "path": "."
             }
           ],
           "items": {
