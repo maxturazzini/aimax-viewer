@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as http from 'http';
-import { execFile, spawn } from 'child_process';
+import { execFile, execFileSync, spawn } from 'child_process';
 import { parseMarkdown, wrapMarkdownHtml, extractFrontmatter } from './markdown-parser';
 import { ANNOTATION_CLIENT_JS, injectAnnotationClient } from './annotation-client';
 import { injectLinkHandler } from './link-handler-client';
@@ -355,6 +355,9 @@ export function activate(context: vscode.ExtensionContext) {
                 break;
             case 'revealInOS':
                 vscode.commands.executeCommand('revealFileInOS', uri);
+                break;
+            case 'commitFolder':
+                vscode.commands.executeCommand('aimaxViewer.commitFolderWithClaude', uri);
                 break;
         }
     });
@@ -713,6 +716,59 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.commands.executeCommand('vscode.openFolder', uri, { forceNewWindow: true });
     });
 
+    // Command: Commit with Claude (folder-scoped selective commit via Claude Code)
+    const commitFolderWithClaudeCommand = vscode.commands.registerCommand('aimaxViewer.commitFolderWithClaude', (folderUri: vscode.Uri) => {
+        if (!folderUri || !folderUri.fsPath) {
+            vscode.window.showWarningMessage('Commit with Claude: no folder selected');
+            return;
+        }
+        const folderPath = folderUri.fsPath;
+        const folderName = path.basename(folderPath);
+
+        let repoRoot: string;
+        try {
+            repoRoot = execFileSync('git', ['-C', folderPath, 'rev-parse', '--show-toplevel'],
+                { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+        } catch {
+            vscode.window.showWarningMessage(`${folderName} is not inside a git repository`);
+            return;
+        }
+
+        let status: string;
+        try {
+            status = execFileSync('git', ['-C', repoRoot, 'status', '--porcelain', '--', folderPath],
+                { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+        } catch (e: any) {
+            vscode.window.showErrorMessage(`git status failed: ${e.message || e}`);
+            return;
+        }
+        if (status.trim() === '') {
+            vscode.window.showInformationMessage(`Nothing to commit in ${folderName}`);
+            return;
+        }
+
+        const relativePath = path.relative(repoRoot, folderPath) || '.';
+        const relForPrompt = relativePath.split(path.sep).join('/');
+        const userLang = vscode.env.language || 'en';
+
+        const prompt =
+`Selective commit of the modified files inside ${relForPrompt}.
+
+Steps:
+1. Show me \`git status -s -- ${relForPrompt}\`
+2. If more than 3 files, group them by logical theme
+3. Propose commit messages for each group
+4. Wait for my explicit OK before committing
+5. Do not touch files outside ${relForPrompt}
+
+Reply to me in language: ${userLang} (IETF BCP 47 tag).`;
+
+        const terminal = vscode.window.createTerminal({ name: 'Claude — Commit', cwd: repoRoot });
+        terminal.show();
+        const escaped = prompt.replace(/'/g, "'\\''");
+        terminal.sendText(`claude '${escaped}'`);
+    });
+
     // Command: Open new terminal
     const openTerminalCommand = vscode.commands.registerCommand('aimaxViewer.openTerminal', () => {
         vscode.commands.executeCommand('workbench.action.terminal.new');
@@ -816,6 +872,7 @@ export function activate(context: vscode.ExtensionContext) {
         presentFileCommand,
         addFolderToViewerCommand,
         openFolderInNewWindowCommand,
+        commitFolderWithClaudeCommand,
         openTerminalCommand,
         openClaudeCodeCommand,
         openArtifactsBrowserCommand,

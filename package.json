@@ -122,6 +122,11 @@
       {
         "command": "aimaxViewer.openFolderInNewWindow",
         "title": "Open this Folder in a New Window"
+      },
+      {
+        "command": "aimaxViewer.commitFolderWithClaude",
+        "title": "Commit with Claude",
+        "category": "AIMax Viewer"
       }
     ],
     "viewsContainers": {
@@ -175,6 +180,11 @@
         },
         {
           "command": "aimaxViewer.openFolderInNewWindow",
+          "when": "explorerResourceIsFolder",
+          "group": "navigation"
+        },
+        {
+          "command": "aimaxViewer.commitFolderWithClaude",
           "when": "explorerResourceIsFolder",
           "group": "navigation"
         }

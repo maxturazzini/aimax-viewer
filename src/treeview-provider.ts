@@ -672,6 +672,11 @@ export class ArtifactsWebviewProvider implements vscode.WebviewViewProvider {
                 const sep = document.createElement('div');
                 sep.className = 'ctx-sep';
                 ctxMenu.appendChild(sep);
+            } else {
+                addCtxItem('codicon-git-commit', 'Commit with Claude', 'commitFolder');
+                const sep = document.createElement('div');
+                sep.className = 'ctx-sep';
+                ctxMenu.appendChild(sep);
             }
             addCtxItem('codicon-files', 'Reveal in Explorer', 'revealInExplorer');
             addCtxItem('codicon-folder-opened', 'Reveal in Finder', 'revealInOS');

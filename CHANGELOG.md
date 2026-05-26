@@ -2,9 +2,23 @@
 
 All notable changes to the AIMax Viewer extension will be documented in this file.
 
-## [Unreleased] - 0.1.32
+## [0.1.32] - 2026-05-20
 
-_In progress._
+### Added
+
+- **Commit with Claude**: right-click on any folder (VS Code Explorer or Artifacts sidebar) to start a scoped commit session via Claude Code.
+  - Runs `git status --porcelain` limited to that folder and only opens a terminal if there's something to commit.
+  - Shows an info banner (`Nothing to commit in <folder>`) when the folder is clean and a warning (`<folder> is not inside a git repository`) when outside a repo — zero wasted terminals or tokens.
+  - The terminal is opened at the **repo root** (not the selected folder) so all `git` commands work correctly, while the prompt scopes the work to the selected folder via its relative path.
+  - The prompt instructs Claude to: list scoped changes, group them by logical theme when more than three files, propose commit messages per group, and wait for explicit OK before committing.
+  - The prompt is localized to the user's VS Code UI language (`vscode.env.language`, IETF BCP 47) — Claude replies in Italian on an Italian VS Code, English on English, etc., while the prompt template itself stays in English.
+  - Cross-platform: uses `execFileSync` with array args (no shell quoting issues with spaces / accents in paths) on macOS and Windows.
+
+### Technical
+
+- New command: `aimaxViewer.commitFolderWithClaude` (accepts a `vscode.Uri` folder argument).
+- `package.json`: registered the command, added an entry under `menus.explorer/context` with `when: explorerResourceIsFolder` in the `navigation` group.
+- `src/treeview-provider.ts`: extended the Artifacts webview context menu to expose "Commit with Claude" when the right-clicked node is a folder; action routed through the existing `contextAction` postMessage channel.
 
 ---
 
