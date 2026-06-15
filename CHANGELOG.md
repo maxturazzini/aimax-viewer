@@ -2,9 +2,16 @@
 
 All notable changes to the AIMax Viewer extension will be documented in this file.
 
-## [0.1.33] - 2026-05-26
+## [0.1.33] - 2026-06-15
 
 ### Added
+
+- **Slide Sorter (presenter mode)**: full-screen overlay to reorder and hide/show slides with live thumbnails.
+  - Open with the **⊞ Sorter** button above the carousel or the **`S`** shortcut; **`Esc`** to close.
+  - Thumbnails are functioning mini-iframes in a zoomable, multi-row grid (zoom slider in the header); iframes build once and reorder via DOM moves (no reload).
+  - **Drag & drop** to reorder freely; a blue edge indicator shows the drop position.
+  - **Eye toggle** per slide hides/shows it. Hidden slides stay in the carousel (dimmed, with a badge) and can be opened on demand, but are skipped by next/prev navigation and the audience window (kept in the source as `<section data-hidden>`).
+  - **Save order** rewrites the deck file in the new order, renumbers the visible `slide-num` badges (`N / TOT`, with TOT = visible count), and reloads the deck + audience window in place. A one-per-session `.bak` is written before the first save.
 
 - **Annotation mode — Edit in place (beta, personal)**: new orange "Edit" toggle next to the existing Annotation toggle in both Browser Panel and Home Panel toolbars.
   - Click a plain-text element (`<p>`, `<h1>`–`<h6>`, `<li>`, `<td>`, etc.) to open a textarea pre-populated with its current text. Press Enter to apply the change to the DOM immediately and queue it for save.
@@ -17,6 +24,8 @@ All notable changes to the AIMax Viewer extension will be documented in this fil
 
 ### Technical
 
+- `slide-presenter.html`: Slide Sorter overlay; the slide model now keeps **all** sections (with a `hidden` flag, array index = DOM index) so navigation skips hidden slides while explicit clicks still show them.
+- `src/extension.ts`: new `/__save-deck` HTTP endpoint (`writeDeckFile`) for full-file deck saves, reusing the same workspace gate and one-per-session `.bak` policy as `/__save-notes`.
 - `src/annotation-client.ts`: extended `annot:toggle` payload with `mode: 'comment' | 'edit'` and `notes: boolean`; new `edit:save`, `edit:remove`, `edit:result`, `edit:toast` message types; in-iframe toast + Notes reveal stylesheet.
 - `src/extension.ts`: new `applyHtmlEdits()` helper, `filePathToWorkspacePath()` gate, `resolveEditTarget()`, `handleSaveEdit()`, session-scoped `editBackupOnce: Set<string>`. Wired `saveEdit` into all three panel `onDidReceiveMessage` handlers (Browser Panel single-tab, Browser Panel multi-tab, Home Panel).
 
