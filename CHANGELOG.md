@@ -2,6 +2,26 @@
 
 All notable changes to the AIMax Viewer extension will be documented in this file.
 
+## [0.1.33] - 2026-05-26
+
+### Added
+
+- **Annotation mode — Edit in place (beta, personal)**: new orange "Edit" toggle next to the existing Annotation toggle in both Browser Panel and Home Panel toolbars.
+  - Click a plain-text element (`<p>`, `<h1>`–`<h6>`, `<li>`, `<td>`, etc.) to open a textarea pre-populated with its current text. Press Enter to apply the change to the DOM immediately and queue it for save.
+  - A green ✏ badge marks each pending edit. The toolbar shows a `SAVE (N)` button that flushes the batch to disk on click.
+  - **Sub-toggle 📝 Notes** (visible only inside Edit mode): reveals hidden `<div class="speaker-notes">` blocks of slide decks with a yellow highlight and restricts editing to them. Multi-line textarea, Enter for newline, ⌘↵ (Cmd+Enter / Ctrl+Enter) to save.
+  - **Safety gates**: Edit toggle is disabled unless the URL is a workspace `.html` served by the AIMax server (no `.md`, no `/__proxy__/`, no external sites). Reuses the existing `urlToWorkspacePath()` gate.
+  - **Save strategy — anchored text replace**: each edit must match its original text exactly once in the source file. On 0 matches → "Text not found" (file changed externally). On ≥2 matches → "Ambiguous: edit manually". Failed edits don't block other edits in the batch.
+  - **Automatic backup**: the first save per file per session writes a sidecar `<file>.bak` snapshot of the on-disk content right before any edit. Subsequent saves of the same file in the same session don't overwrite the `.bak`.
+  - **Element filter**: refuses elements with element children (e.g. `<p>Hello <strong>world</strong></p>`) with a toast — single text-node leaves only.
+
+### Technical
+
+- `src/annotation-client.ts`: extended `annot:toggle` payload with `mode: 'comment' | 'edit'` and `notes: boolean`; new `edit:save`, `edit:remove`, `edit:result`, `edit:toast` message types; in-iframe toast + Notes reveal stylesheet.
+- `src/extension.ts`: new `applyHtmlEdits()` helper, `filePathToWorkspacePath()` gate, `resolveEditTarget()`, `handleSaveEdit()`, session-scoped `editBackupOnce: Set<string>`. Wired `saveEdit` into all three panel `onDidReceiveMessage` handlers (Browser Panel single-tab, Browser Panel multi-tab, Home Panel).
+
+---
+
 ## [0.1.32] - 2026-05-20
 
 ### Added

@@ -53,6 +53,54 @@ src/
 
 4. **Markdown Processing**: Uses placeholder technique (`<!--CODEBLOCK-->`) to protect code blocks during regex processing
 
+### Direct Save to Served Files (in-place edit mechanism)
+
+The viewer can **write edits straight back to the source file on disk** for any
+`.html` it serves, without leaving AIMax. This is the foundation to reuse for any
+future "edit a rendered artifact and persist it" feature. Three facts make it work:
+
+1. **The physical path is always recoverable from the HTTP URL.** A served URL
+   like `http://127.0.0.1:<port>/Artifacts/deck.html` maps deterministically to
+   `<workspace>/Artifacts/deck.html`. `urlToWorkspacePath(url)` does this with all
+   safety gates (host/port must be AIMax's own server, path must end in `.html`,
+   not `/__proxy__/` `/__presenter` `/api/`, file must exist). `filePathToWorkspacePath(filePath)`
+   is the equivalent for a directly-supplied path (Home Panel case), and
+   `resolveEditTarget(message)` accepts either `{url}` or `{filePath}`.
+
+2. **`applyHtmlEdits(absolutePath, edits[])` is the single write primitive.** Each
+   edit is `{n, oldText, newText, selector?, occurrenceIndex?, outerHTML?}`. It does an
+   **anchored verbatim text replace** in the raw source with three disambiguation
+   levels: (1) `oldText` unique → replace; (2) ambiguous but `outerHTML` unique →
+   replace inside it; (3) still ambiguous → pick the `occurrenceIndex`-th match
+   (DOM order ≈ source order). On 0 matches → "Text not found"; on unresolved
+   ambiguity → rejected. Per-edit failures don't block the rest of the batch. It
+   writes a **one-per-file-per-session `.bak` backup** (`editBackupOnce: Set`)
+   before the first edit. **`oldText` must match the file bytes verbatim** — so
+   anchor on raw-source substrings, not DOM-serialized HTML (attribute order,
+   entities, whitespace inside tags won't round-trip). Plain text inside an
+   element survives verbatim; that's why edits target single text-node leaves.
+
+3. **Two entry points reach `applyHtmlEdits`:**
+   - **Webview → host (postMessage):** the panel scripts post
+     `vscode.postMessage({ command: 'saveEdit', url|filePath, edits })`; the panel's
+     `onDidReceiveMessage` calls `handleSaveEdit(message, panel)`, which resolves the
+     target, applies the edits, and posts back `{ command: 'saveEditResult', applied, failed }`.
+     Used by Edit mode (orange ✏ toggle) in Browser Panel and Home Panel.
+   - **HTTP endpoint:** `POST /__save-notes` with body `{ url, oldText, newText }`
+     resolves via `urlToWorkspacePath` and calls `applyHtmlEdits` directly, returning
+     `{ ok, error? }`. Used by the **in-panel slide presenter's "Save notes" button**
+     (`slide-presenter.html` → `agenticSaveNotes()`), which refetches the deck source,
+     locates the slide's `<div class="speaker-notes">…</div>` block, checks it is
+     unique, escapes the new inner text, and POSTs the `oldBlock`/`newBlock` pair.
+     The HTTP route is the right choice when the editor lives outside the webview
+     postMessage channel (e.g. a page served into an iframe or the system browser).
+
+**To add a new direct-edit feature:** compute a verbatim `oldText`/`newText` pair from
+the raw source (not from the DOM), then either post `saveEdit` (if inside a webview
+panel) or add/extend an HTTP endpoint that calls `applyHtmlEdits`. Reuse
+`urlToWorkspacePath`/`resolveEditTarget` for the path — never trust a client-supplied
+filesystem path. The `.bak` backup and ambiguity gates come for free.
+
 ### Extension Points
 
 - **URI Handler**: `vscode://aimax.aimax-viewer/openBrowser?<url>` for deep linking

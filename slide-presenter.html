@@ -375,7 +375,26 @@ body {
     display: flex;
     align-items: center;
     justify-content: center;
+    position: relative;
 }
+
+.sorter-open-btn {
+    position: absolute;
+    right: 4px;
+    top: 50%;
+    transform: translateY(-50%);
+    background: var(--gray);
+    color: rgba(255,255,255,0.7);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 5px;
+    padding: 3px 10px;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    z-index: 3;
+    transition: background 0.15s, color 0.15s;
+}
+.sorter-open-btn:hover { background: #2a2a35; color: #fff; }
 
 .carousel-resize-handle::after {
     content: '';
@@ -453,6 +472,179 @@ body {
 .carousel-item.active .carousel-num {
     opacity: 1;
 }
+
+/* Hidden slides still appear in the carousel (dimmed, dashed, with a badge) so
+   you can click to show them on demand, but they're skipped by next/prev. */
+.carousel-item.carousel-hidden {
+    opacity: 0.45;
+    border-style: dashed;
+}
+.carousel-item.carousel-hidden:hover { opacity: 0.75; }
+.carousel-item.carousel-hidden.active { opacity: 0.9; }
+.carousel-item .carousel-hidden-badge {
+    position: absolute;
+    top: 2px;
+    left: 3px;
+    font-size: 9px;
+    z-index: 1;
+    background: rgba(0,0,0,0.55);
+    border-radius: 3px;
+    padding: 0 2px;
+    line-height: 1.3;
+}
+
+/* === SLIDE SORTER === */
+.sorter-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(8, 8, 14, 0.97);
+    z-index: 10000;
+    display: none;
+    flex-direction: column;
+}
+.sorter-overlay.open { display: flex; }
+
+.sorter-header {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 12px 20px;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+}
+.sorter-header h2 {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 600;
+    color: #fff;
+    letter-spacing: 0.3px;
+}
+.sorter-header .sorter-hint {
+    font-size: 12px;
+    color: rgba(255,255,255,0.45);
+}
+.sorter-header .spacer { flex: 1; }
+.sorter-zoom {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: rgba(255,255,255,0.6);
+    font-size: 12px;
+}
+.sorter-zoom input[type=range] { width: 140px; accent-color: var(--blue); }
+.sorter-header button {
+    background: var(--gray);
+    color: #fff;
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 6px;
+    padding: 7px 14px;
+    font-size: 13px;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+}
+.sorter-header button:hover { background: #2a2a35; }
+.sorter-header button.primary {
+    background: var(--blue);
+    border-color: var(--blue);
+    color: #001018;
+    font-weight: 600;
+}
+.sorter-header button.primary:hover { background: #29b6ff; }
+.sorter-header button:disabled { opacity: 0.4; cursor: default; }
+
+.sorter-grid {
+    flex: 1;
+    overflow-y: auto;
+    padding: 24px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 20px;
+    align-content: flex-start;
+}
+
+.sorter-tile {
+    flex: 0 0 auto;
+    position: relative;
+    background: #000;
+    border-radius: 6px;
+    border: 2px solid rgba(255,255,255,0.1);
+    overflow: hidden;
+    cursor: grab;
+    transition: border-color 0.15s, transform 0.12s, box-shadow 0.15s;
+}
+.sorter-tile:hover { border-color: rgba(255,255,255,0.35); }
+.sorter-tile.dragging { opacity: 0.4; cursor: grabbing; }
+.sorter-tile.drop-before { box-shadow: -4px 0 0 0 var(--blue); }
+.sorter-tile.drop-after { box-shadow: 4px 0 0 0 var(--blue); }
+.sorter-tile.hidden-slide { opacity: 0.4; border-style: dashed; }
+.sorter-tile.hidden-slide:hover { opacity: 0.65; }
+
+.sorter-tile iframe {
+    position: absolute;
+    top: 0; left: 0;
+    width: 1280px;
+    height: 720px;
+    border: none;
+    pointer-events: none;
+    transform-origin: 0 0;
+}
+
+.sorter-tile .tile-num {
+    position: absolute;
+    top: 4px; left: 5px;
+    font-size: 11px;
+    font-weight: 700;
+    color: #fff;
+    background: rgba(0,0,0,0.6);
+    border-radius: 4px;
+    padding: 1px 6px;
+    z-index: 2;
+}
+.sorter-tile.hidden-slide .tile-num { background: rgba(0,0,0,0.6); color: rgba(255,255,255,0.6); }
+
+.sorter-tile .tile-eye {
+    position: absolute;
+    top: 4px; right: 5px;
+    width: 22px; height: 22px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+    background: rgba(0,0,0,0.6);
+    color: rgba(255,255,255,0.7);
+    font-size: 12px;
+    cursor: pointer;
+    z-index: 2;
+    opacity: 0;
+    transition: opacity 0.15s, color 0.15s;
+}
+.sorter-tile:hover .tile-eye,
+.sorter-tile.hidden-slide .tile-eye { opacity: 1; }
+.sorter-tile .tile-eye:hover { color: #fff; }
+
+.sorter-tile .tile-hidden-badge {
+    position: absolute;
+    bottom: 4px; left: 5px;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--blue);
+    background: rgba(0,0,0,0.6);
+    border-radius: 4px;
+    padding: 1px 6px;
+    z-index: 2;
+    display: none;
+}
+.sorter-tile.hidden-slide .tile-hidden-badge { display: block; }
+
+.sorter-status {
+    font-size: 12px;
+    color: rgba(255,255,255,0.55);
+    min-width: 90px;
+}
+.sorter-status.error { color: #ff6b6b; }
+.sorter-status.success { color: #4caf50; }
 
 /* === BOTTOM BAR === */
 .bottom-bar {
@@ -690,7 +882,7 @@ body {
         <div class="notes-content">
             <div class="label">Speaker Notes
                 <span class="notes-font-controls">
-                    <button id="agenticSaveBtn" class="agentic-save-btn" onclick="agenticSaveNotes()" title="Agentic Save Notes" aria-label="Agentic Save Notes">
+                    <button id="agenticSaveBtn" class="agentic-save-btn" onclick="agenticSaveNotes()" title="Save notes to source file" aria-label="Save notes to source file">
                         <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor"><path d="M2 2v12h12V4.5L11.5 2H2zm2 1h6v3h1V3h1.5L13 4.5V13H4v-3h6V8H4V3z"/><path d="M11.6 9.2l.6 1.2 1.2.6-1.2.6-.6 1.2-.6-1.2-1.2-.6 1.2-.6.6-1.2z"/></svg>
                     </button>
                     <button onclick="changeNotesFontSize(-2)" title="Decrease font">A&minus;</button>
@@ -701,7 +893,9 @@ body {
         </div>
     </div>
 
-    <div class="carousel-resize-handle" id="carouselResizeHandle" title="Drag to resize carousel"></div>
+    <div class="carousel-resize-handle" id="carouselResizeHandle" title="Drag to resize carousel">
+        <button class="sorter-open-btn" id="sorterOpenBtn" onclick="openSorter(); event.stopPropagation();" title="Slide Sorter (S) — reorder & hide slides">⊞ Sorter</button>
+    </div>
 
     <div class="carousel" id="carousel"></div>
 
@@ -717,6 +911,23 @@ body {
         <div class="timer" id="timer">00:00</div>
         <div class="clock" id="clock"></div>
     </div>
+</div>
+
+<!-- SLIDE SORTER -->
+<div class="sorter-overlay" id="sorterOverlay">
+    <div class="sorter-header">
+        <h2>Slide Sorter</h2>
+        <span class="sorter-hint">Drag to reorder · click the eye to hide/show · numbers update on save</span>
+        <span class="spacer"></span>
+        <span class="sorter-status" id="sorterStatus"></span>
+        <div class="sorter-zoom">
+            <span>Zoom</span>
+            <input type="range" id="sorterZoom" min="120" max="420" value="220" oninput="setSorterZoom(this.value)">
+        </div>
+        <button onclick="closeSorter()">Cancel (Esc)</button>
+        <button class="primary" id="sorterSaveBtn" onclick="saveSorter()">Save order</button>
+    </div>
+    <div class="sorter-grid" id="sorterGrid"></div>
 </div>
 
 <!-- AGENTIC SAVE NOTES BANNERS -->
@@ -775,21 +986,10 @@ function startPresenter() {
 
     loader.onload = () => {
         const doc = loader.contentDocument;
-        const sections = doc.querySelectorAll('section');
-        slides = [];
-        sections.forEach((s, i) => {
-            const h = s.querySelector('h1, h2');
-            const notesEl = s.querySelector('.speaker-notes');
-            slides.push({
-                index: i,
-                title: h ? h.textContent : `Slide ${i + 1}`,
-                notes: notesEl ? notesEl.textContent : '',
-                className: s.className
-            });
-        });
+        slides = parseSlides(doc);
         document.body.removeChild(loader);
         buildCarousel();
-        goToSlide(0);
+        goToSlide(firstVisibleIndex());
         // Return focus to presenter window
         window.focus();
     };
@@ -797,7 +997,8 @@ function startPresenter() {
     // Listen for audience scroll events
     channel.onmessage = (e) => {
         if (e.data.type === 'slideChanged' && e.data.source === 'audience') {
-            currentIndex = e.data.index;
+            // Audience reports a DOM section index, which now matches our array index.
+            currentIndex = Math.max(0, Math.min(e.data.index, slides.length - 1));
             updatePresenterView();
         }
     };
@@ -816,20 +1017,65 @@ function startPresenter() {
 let carouselItemWidth = 106;
 let carouselItemHeight = 60;
 
+// Build the full slide model (ALL sections, including hidden) from a deck
+// document. Array index === DOM section index. Hidden slides carry hidden:true
+// so navigation can skip them while explicit clicks still show them.
+function parseSlides(doc) {
+    const out = [];
+    doc.querySelectorAll('section').forEach((s, i) => {
+        const h = s.querySelector('h1, h2');
+        const notesEl = s.querySelector('.speaker-notes');
+        out.push({
+            index: i,
+            domIndex: i,
+            title: h ? h.textContent : `Slide ${i + 1}`,
+            notes: notesEl ? notesEl.textContent : '',
+            className: s.className,
+            hidden: s.hasAttribute('data-hidden')
+        });
+    });
+    return out;
+}
+
+function firstVisibleIndex() {
+    const i = slides.findIndex(s => !s.hidden);
+    return i >= 0 ? i : 0;
+}
+// Next/previous visible slide from `from` (exclusive). Returns -1 if none.
+function nextVisibleIndex(from) {
+    for (let i = from + 1; i < slides.length; i++) if (!slides[i].hidden) return i;
+    return -1;
+}
+function prevVisibleIndex(from) {
+    for (let i = from - 1; i >= 0; i--) if (!slides[i].hidden) return i;
+    return -1;
+}
+// Position of a slide among the visible ones (1-based), or 0 if hidden.
+function visiblePosition(index) {
+    if (slides[index] && slides[index].hidden) return 0;
+    let n = 0;
+    for (let i = 0; i <= index && i < slides.length; i++) if (!slides[i].hidden) n++;
+    return n;
+}
+function visibleCount() {
+    return slides.filter(s => !s.hidden).length;
+}
+
 function buildCarousel() {
     const carousel = document.getElementById('carousel');
     carousel.textContent = '';
     slides.forEach((s, i) => {
         const item = document.createElement('div');
-        item.className = 'carousel-item';
+        item.className = 'carousel-item' + (s.hidden ? ' carousel-hidden' : '');
         item.style.width = carouselItemWidth + 'px';
         item.style.height = carouselItemHeight + 'px';
+        item.title = s.hidden ? 'Hidden slide — click to show it anyway' : '';
         item.onclick = () => goToSlide(i);
 
         const iframe = document.createElement('iframe');
         iframe.src = deckBaseUrl;
         iframe.onload = () => {
-            scrollIframeToSlide(iframe, i);
+            scrollIframeToSlide(iframe, i, true);
             try {
                 const iframeDoc = iframe.contentDocument;
                 iframeDoc.documentElement.style.overflow = 'hidden';
@@ -839,10 +1085,17 @@ function buildCarousel() {
 
         const num = document.createElement('div');
         num.className = 'carousel-num';
-        num.textContent = i + 1;
+        num.textContent = s.hidden ? '∅' : visiblePosition(i);
 
         item.appendChild(iframe);
         item.appendChild(num);
+        if (s.hidden) {
+            const badge = document.createElement('div');
+            badge.className = 'carousel-hidden-badge';
+            badge.textContent = '🚫';
+            badge.title = 'Hidden';
+            item.appendChild(badge);
+        }
         carousel.appendChild(item);
     });
 }
@@ -918,18 +1171,29 @@ function initResize() {
     }
 }
 
-function syncAudienceToSlide(index) {
+function syncAudienceToSlide(domIndex, reveal) {
     if (audienceWin && !audienceWin.closed) {
         try {
-            const sections = audienceWin.document.querySelectorAll('section');
-            if (sections[index]) {
+            const adoc = audienceWin.document;
+            // Ensure hidden sections never show in the audience window
+            if (!adoc.getElementById('__sorterHideStyle')) {
+                const st = adoc.createElement('style');
+                st.id = '__sorterHideStyle';
+                st.textContent = 'section[data-hidden]{display:none !important;}';
+                adoc.head.appendChild(st);
+            }
+            const sections = adoc.querySelectorAll('section');
+            const target = sections[domIndex];
+            if (target) {
+                // Explicitly viewing a hidden slide: reveal it for the audience too
+                if (reveal && target.hasAttribute('data-hidden')) target.style.display = 'flex';
                 // Disable snap for instant jump, then re-enable
-                audienceWin.document.documentElement.style.scrollBehavior = 'auto';
-                audienceWin.document.documentElement.style.scrollSnapType = 'none';
-                sections[index].scrollIntoView();
+                adoc.documentElement.style.scrollBehavior = 'auto';
+                adoc.documentElement.style.scrollSnapType = 'none';
+                target.scrollIntoView();
                 setTimeout(() => {
-                    audienceWin.document.documentElement.style.scrollBehavior = 'smooth';
-                    audienceWin.document.documentElement.style.scrollSnapType = 'y mandatory';
+                    adoc.documentElement.style.scrollBehavior = 'smooth';
+                    adoc.documentElement.style.scrollSnapType = 'y mandatory';
                 }, 50);
             }
         } catch(e) {}
@@ -939,37 +1203,42 @@ function syncAudienceToSlide(index) {
 function goToSlide(index) {
     if (index < 0 || index >= slides.length) return;
     currentIndex = index;
+    const reveal = !!(slides[index] && slides[index].hidden);
     updatePresenterView();
-    // Tell audience to scroll
+    // Tell audience to scroll (index === DOM section index)
     if (channel) {
-        channel.postMessage({ type: 'goToSlide', index: index, source: 'presenter' });
+        channel.postMessage({ type: 'goToSlide', index: index, source: 'presenter', reveal: reveal });
     }
     // Sync audience window
-    syncAudienceToSlide(index);
+    syncAudienceToSlide(index, reveal);
 }
 
 function updatePresenterView() {
     const slide = slides[currentIndex];
-    const nextSlideData = slides[currentIndex + 1];
+    // "Next" preview shows the next VISIBLE slide
+    const nextIdx = nextVisibleIndex(currentIndex);
+    const nextSlideData = nextIdx >= 0 ? slides[nextIdx] : null;
 
-    // Counter
-    document.getElementById('slideCounter').textContent = `${currentIndex + 1} / ${slides.length}`;
+    // Counter — among visible slides, or marked as a hidden preview
+    const total = visibleCount();
+    document.getElementById('slideCounter').textContent =
+        slide.hidden ? `(hidden) / ${total}` : `${visiblePosition(currentIndex)} / ${total}`;
 
     // Title
-    document.getElementById('slideTitle').textContent = slide.title;
+    document.getElementById('slideTitle').textContent = slide.title + (slide.hidden ? ' — HIDDEN' : '');
 
     // Notes
     const notesEl = document.getElementById('notesText');
     notesEl.innerText = slide.notes || '(no notes for this slide)';
     notesEl.style.fontSize = notesFontSize + 'px';
 
-    // Current slide iframe - scroll to section
+    // Current slide iframe — reveal if the current slide is hidden (explicit view)
     const currentFrame = document.getElementById('currentFrame');
     if (!currentFrame.src || !currentFrame.src.includes(deckBaseUrl.split('?')[0])) {
         currentFrame.src = deckBaseUrl;
-        currentFrame.onload = () => { scrollIframeToSlide(currentFrame, currentIndex); fitIframe(currentFrame); };
+        currentFrame.onload = () => { scrollIframeToSlide(currentFrame, currentIndex, slide.hidden); fitIframe(currentFrame); };
     } else {
-        scrollIframeToSlide(currentFrame, currentIndex);
+        scrollIframeToSlide(currentFrame, currentIndex, slide.hidden);
     }
 
     // Next slide iframe
@@ -977,9 +1246,9 @@ function updatePresenterView() {
     if (nextSlideData) {
         if (!nextFrame.src || !nextFrame.src.includes(deckBaseUrl.split('?')[0])) {
             nextFrame.src = deckBaseUrl;
-            nextFrame.onload = () => { scrollIframeToSlide(nextFrame, currentIndex + 1); fitIframe(nextFrame); };
+            nextFrame.onload = () => { scrollIframeToSlide(nextFrame, nextIdx); fitIframe(nextFrame); };
         } else {
-            scrollIframeToSlide(nextFrame, currentIndex + 1);
+            scrollIframeToSlide(nextFrame, nextIdx);
         }
     }
 
@@ -996,30 +1265,54 @@ function updatePresenterView() {
     if (saveBtn) saveBtn.disabled = !!(slides[currentIndex] && slides[currentIndex].savePending);
 }
 
-function scrollIframeToSlide(iframe, index) {
+// Hide any data-hidden sections inside a deck iframe so they never render in
+// previews or the audience window, even though they remain in the source file.
+function hideHiddenSections(iframe) {
     try {
         const doc = iframe.contentDocument;
+        if (doc.getElementById('__sorterHideStyle')) return;
+        const style = doc.createElement('style');
+        style.id = '__sorterHideStyle';
+        style.textContent = 'section[data-hidden]{display:none !important;}';
+        doc.head.appendChild(style);
+    } catch(e) {}
+}
+
+// Scroll a deck iframe to section `index`. `revealTarget` forces that one
+// section visible even if it carries data-hidden (so carousel thumbnails and
+// explicit clicks on hidden slides still render the slide itself).
+function scrollIframeToSlide(iframe, index, revealTarget) {
+    try {
+        hideHiddenSections(iframe);
+        const doc = iframe.contentDocument;
         const sections = doc.querySelectorAll('section');
-        if (sections[index]) {
-            // Disable smooth scroll for instant jump in preview
-            doc.documentElement.style.scrollBehavior = 'auto';
-            doc.documentElement.style.scrollSnapType = 'none';
-            sections[index].scrollIntoView();
-            // Re-enable after a tick
-            setTimeout(() => {
-                doc.documentElement.style.scrollBehavior = 'smooth';
-                doc.documentElement.style.scrollSnapType = 'y mandatory';
-            }, 50);
+        const target = sections[index];
+        if (!target) return;
+        let restore = false;
+        if (revealTarget && target.hasAttribute('data-hidden')) {
+            target.style.display = 'flex';  // override the hide rule for this one
+            restore = true;
         }
+        // Disable smooth scroll for instant jump in preview
+        doc.documentElement.style.scrollBehavior = 'auto';
+        doc.documentElement.style.scrollSnapType = 'none';
+        target.scrollIntoView();
+        // Re-enable after a tick
+        setTimeout(() => {
+            doc.documentElement.style.scrollBehavior = 'smooth';
+            doc.documentElement.style.scrollSnapType = 'y mandatory';
+        }, 50);
     } catch(e) {}
 }
 
 function nextSlide() {
-    goToSlide(currentIndex + 1);
+    const i = nextVisibleIndex(currentIndex);
+    if (i >= 0) goToSlide(i);
 }
 
 function prevSlide() {
-    goToSlide(currentIndex - 1);
+    const i = prevVisibleIndex(currentIndex);
+    if (i >= 0) goToSlide(i);
 }
 
 function toggleTimer() {
@@ -1240,6 +1533,275 @@ function splitSectionsRaw(raw) {
     return raw.match(re) || [];
 }
 
+// === SLIDE SORTER ===
+// Reorder, hide/show, and renumber slides, then write the whole deck back to
+// the source file (one-per-session .bak via /__save-deck). Operates on the raw
+// HTML so it can see hidden sections that are absent from the presented `slides`.
+let sorterItems = [];        // [{ html, hidden }] in current display order
+let sorterRawHead = '';      // everything before the first <section>
+let sorterRawTail = '';      // everything after the last </section>
+let sorterDragFrom = -1;
+let sorterTileWidth = 220;
+
+function sectionIsHidden(html) {
+    const open = html.match(/<section\b[^>]*>/i);
+    return !!open && /\bdata-hidden\b/i.test(open[0]);
+}
+
+// Add or remove the data-hidden attribute on a section's opening tag.
+function setSectionHidden(html, hidden) {
+    return html.replace(/<section\b([^>]*)>/i, (m, attrs) => {
+        let a = attrs.replace(/\s*\bdata-hidden(="[^"]*")?/i, '');
+        if (hidden) a += ' data-hidden';
+        return '<section' + a + '>';
+    });
+}
+
+// Rewrite the slide-num badge to "n / total". Leaves sections without one alone.
+function setSectionNumber(html, n, total) {
+    return html.replace(
+        /(<div\b[^>]*\bclass="[^"]*\bslide-num\b[^"]*"[^>]*>)([\s\S]*?)(<\/div>)/i,
+        (m, open, inner, close) => open + n + ' / ' + total + close
+    );
+}
+
+async function openSorter() {
+    if (!deckBaseUrl) return;
+    const grid = document.getElementById('sorterGrid');
+    const status = document.getElementById('sorterStatus');
+    document.getElementById('sorterOverlay').classList.add('open');
+    status.className = 'sorter-status';
+    status.textContent = 'Loading…';
+    grid.textContent = '';
+
+    let raw;
+    try {
+        raw = await fetch(deckBaseUrl, { cache: 'no-store' }).then(r => {
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            return r.text();
+        });
+    } catch (e) {
+        status.className = 'sorter-status error';
+        status.textContent = 'Load failed: ' + e.message;
+        return;
+    }
+
+    const sections = splitSectionsRaw(raw);
+    if (!sections.length) {
+        status.className = 'sorter-status error';
+        status.textContent = 'No <section> slides found.';
+        return;
+    }
+    // Capture head/tail so we can reassemble the file byte-for-byte around slides
+    const firstAt = raw.indexOf(sections[0]);
+    const lastEnd = raw.lastIndexOf(sections[sections.length - 1]) + sections[sections.length - 1].length;
+    sorterRawHead = raw.slice(0, firstAt);
+    sorterRawTail = raw.slice(lastEnd);
+
+    // Each item keeps its own persistent tile DOM node + iframe so reordering and
+    // zooming never reload the iframes (the previous approach rebuilt every
+    // iframe on each change — slow, and they flickered back to slide 1).
+    sorterItems = sections.map((html, i) => ({ html, hidden: sectionIsHidden(html), origIndex: i, tile: null }));
+    status.textContent = '';
+    buildSorterTiles();
+    layoutSorter();
+}
+
+// Create one tile (with a single iframe scrolled to its slide) per item, ONCE.
+function buildSorterTiles() {
+    const grid = document.getElementById('sorterGrid');
+    grid.textContent = '';
+    sorterItems.forEach((it) => {
+        const tile = document.createElement('div');
+        tile.className = 'sorter-tile';
+        tile.draggable = true;
+
+        const iframe = document.createElement('iframe');
+        iframe.src = deckBaseUrl;
+        const secIdx = it.origIndex;  // section index in the (unmodified) source
+        iframe.onload = () => {
+            try {
+                const doc = iframe.contentDocument;
+                doc.documentElement.style.overflow = 'hidden';
+                // Reveal hidden sections so even a hidden slide renders its own content
+                const st = doc.createElement('style');
+                st.textContent = 'section[data-hidden]{display:flex !important;}';
+                doc.head.appendChild(st);
+                const secs = doc.querySelectorAll('section');
+                if (secs[secIdx]) {
+                    doc.documentElement.style.scrollBehavior = 'auto';
+                    doc.documentElement.style.scrollSnapType = 'none';
+                    secs[secIdx].scrollIntoView();
+                }
+            } catch(e) {}
+        };
+
+        const num = document.createElement('div');
+        num.className = 'tile-num';
+
+        const eye = document.createElement('div');
+        eye.className = 'tile-eye';
+        eye.draggable = false;
+        eye.onmousedown = (e) => e.stopPropagation();
+        eye.onclick = (e) => {
+            e.stopPropagation();
+            it.hidden = !it.hidden;
+            layoutSorter();
+        };
+
+        const badge = document.createElement('div');
+        badge.className = 'tile-hidden-badge';
+        badge.textContent = 'Hidden';
+
+        tile.appendChild(iframe);
+        tile.appendChild(num);
+        tile.appendChild(eye);
+        tile.appendChild(badge);
+
+        tile.addEventListener('dragstart', (e) => {
+            sorterDragFrom = sorterItems.indexOf(it);
+            tile.classList.add('dragging');
+            e.dataTransfer.effectAllowed = 'move';
+        });
+        tile.addEventListener('dragend', () => {
+            tile.classList.remove('dragging');
+            grid.querySelectorAll('.sorter-tile').forEach(t => t.classList.remove('drop-before', 'drop-after'));
+        });
+        tile.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            const before = (e.clientX - tile.getBoundingClientRect().left) < tile.offsetWidth / 2;
+            tile.classList.toggle('drop-before', before);
+            tile.classList.toggle('drop-after', !before);
+        });
+        tile.addEventListener('dragleave', () => {
+            tile.classList.remove('drop-before', 'drop-after');
+        });
+        tile.addEventListener('drop', (e) => {
+            e.preventDefault();
+            const i = sorterItems.indexOf(it);
+            const before = (e.clientX - tile.getBoundingClientRect().left) < tile.offsetWidth / 2;
+            let to = i + (before ? 0 : 1);
+            const from = sorterDragFrom;
+            if (from < 0 || from === i) return;
+            const [moved] = sorterItems.splice(from, 1);
+            if (from < to) to--;
+            sorterItems.splice(to, 0, moved);
+            sorterDragFrom = -1;
+            layoutSorter();  // cheap: reorders existing nodes, no iframe reload
+        });
+
+        it.tile = tile;
+        grid.appendChild(tile);
+    });
+}
+
+// Cheap update: reorder existing tiles, refresh numbers / hidden state / zoom.
+// Never recreates iframes.
+function layoutSorter() {
+    const grid = document.getElementById('sorterGrid');
+    const w = sorterTileWidth;
+    const h = Math.round(w * 720 / 1280);
+    let visibleNum = 0;
+    sorterItems.forEach((it) => {
+        if (!it.hidden) visibleNum++;
+        const tile = it.tile;
+        tile.style.width = w + 'px';
+        tile.style.height = h + 'px';
+        tile.classList.toggle('hidden-slide', it.hidden);
+        const iframe = tile.querySelector('iframe');
+        if (iframe) iframe.style.transform = 'scale(' + (w / 1280) + ')';
+        tile.querySelector('.tile-num').textContent = it.hidden ? '∅' : visibleNum;
+        const eye = tile.querySelector('.tile-eye');
+        eye.title = it.hidden ? 'Show this slide' : 'Hide this slide';
+        eye.textContent = it.hidden ? '🚫' : '👁';
+        // Move the node into its new order position (no-op if already there)
+        grid.appendChild(tile);
+    });
+}
+
+function setSorterZoom(v) {
+    sorterTileWidth = parseInt(v, 10);
+    layoutSorter();
+}
+
+function closeSorter() {
+    document.getElementById('sorterOverlay').classList.remove('open');
+}
+
+async function saveSorter() {
+    const status = document.getElementById('sorterStatus');
+    const btn = document.getElementById('sorterSaveBtn');
+    const relPath = httpUrlToWorkspaceRel(deckBaseUrl);
+    if (!relPath) {
+        status.className = 'sorter-status error';
+        status.textContent = 'Deck not served from this workspace.';
+        return;
+    }
+    const total = sorterItems.filter(it => !it.hidden).length;
+    let n = 0;
+    const rebuilt = sorterItems.map(it => {
+        let html = setSectionHidden(it.html, it.hidden);
+        if (!it.hidden) {
+            n++;
+            html = setSectionNumber(html, n, total);
+        }
+        return html;
+    });
+    const content = sorterRawHead + rebuilt.join('\n\n') + sorterRawTail;
+
+    status.className = 'sorter-status';
+    status.textContent = 'Saving…';
+    btn.disabled = true;
+    try {
+        const res = await fetch('/__save-deck', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url: deckBaseUrl, content })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data.ok) {
+            status.className = 'sorter-status success';
+            status.textContent = 'Saved ✓';
+            setTimeout(() => { closeSorter(); reloadDeck(); }, 500);
+        } else {
+            status.className = 'sorter-status error';
+            status.textContent = 'Save failed: ' + ((data.error || 'HTTP ' + res.status).slice(0, 120));
+        }
+    } catch (e) {
+        status.className = 'sorter-status error';
+        status.textContent = 'Save failed: ' + e.message;
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+// Re-read the deck from disk and rebuild carousel + presenter (after a save).
+function reloadDeck() {
+    // The order may have changed, so track the current slide by title to restore it.
+    const keepTitle = slides[currentIndex] ? slides[currentIndex].title : null;
+    const loader = document.createElement('iframe');
+    loader.style.display = 'none';
+    loader.src = deckBaseUrl;
+    document.body.appendChild(loader);
+    loader.onload = () => {
+        const doc = loader.contentDocument;
+        slides = parseSlides(doc);
+        document.body.removeChild(loader);
+        // Force the preview iframes to reload fresh source
+        document.getElementById('currentFrame').src = '';
+        document.getElementById('nextFrame').src = '';
+        // Reload the audience window so it reflects the new order/visibility
+        if (audienceWin && !audienceWin.closed) {
+            try { audienceWin.location.reload(); } catch(e) {}
+        }
+        buildCarousel();
+        let restore = keepTitle ? slides.findIndex(s => s.title === keepTitle) : -1;
+        if (restore < 0) restore = firstVisibleIndex();
+        goToSlide(restore);
+        window.focus();
+    };
+}
+
 function escapeHtmlText(text) {
     return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
@@ -1247,32 +1809,6 @@ function escapeHtmlText(text) {
 function countOccurrences(haystack, needle) {
     if (!needle) return 0;
     return haystack.split(needle).length - 1;
-}
-
-function buildSurgicalPrompt(relPath, oldBlock, newBlock) {
-    return [
-        'You will perform exactly ONE Edit on exactly ONE file. No exploration.',
-        '',
-        `File (workspace-relative): ${relPath}`,
-        '',
-        'old_string (verbatim, do not modify whitespace):',
-        '<<<OLD>>>',
-        oldBlock,
-        '<<<END>>>',
-        '',
-        'new_string (verbatim):',
-        '<<<NEW>>>',
-        newBlock,
-        '<<<END>>>',
-        '',
-        'Rules:',
-        '- Use ONLY the Edit tool. Do NOT use Read, Grep, Glob, Bash, or Write.',
-        '- Do not search for context; the strings above are exact.',
-        '- Do not modify any other file. No tests, no commits, no git.',
-        '- If old_string is not found verbatim, reply "NOT_FOUND" and stop.',
-        '- If old_string appears more than once, reply "AMBIGUOUS" and stop.',
-        '- On success, reply with the single token "OK".'
-    ].join('\n');
 }
 
 function showBanner(state, slideIdx, slideTitle, msg) {
@@ -1379,28 +1915,24 @@ async function agenticSaveNotes() {
 
     if (slides[idx]) slides[idx].savePending = true;
     if (idx === currentIndex) document.getElementById('agenticSaveBtn').disabled = true;
-    updateBanner(banner, 'pending', 'Saving via Claude (up to 5 min)…');
+    updateBanner(banner, 'pending', 'Saving to source…');
 
-    const prompt = buildSurgicalPrompt(relPath, oldBlock, newBlock);
-
+    // Direct save: write the edited note block straight to the source file on
+    // disk via the AIMax server (anchored replace + automatic .bak backup).
     try {
-        const res = await fetch('/__claude', {
+        const res = await fetch('/__save-notes', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ prompt, mode: 'print', allowEdits: true })
+            body: JSON.stringify({ url: deckBaseUrl, oldText: oldBlock, newText: newBlock })
         });
         const data = await res.json().catch(() => ({}));
-        const responseTxt = (data.response || '').trim();
-        const ok = res.ok && data.ok && /^OK\b/.test(responseTxt);
+        const ok = res.ok && data.ok;
         if (ok) {
-            updateBanner(banner, 'success',
-                'Saved to source. Reload presenter to see the updated note (unsaved edits on other slides will be lost).',
-                true);
+            // Keep the in-memory slide in sync so re-saving is a no-op until edited again.
+            if (slides[idx]) slides[idx].notes = newText;
+            updateBanner(banner, 'success', 'Saved to source.', true);
         } else {
-            let reason;
-            if (/NOT_FOUND/.test(responseTxt)) reason = 'Source changed in flight (NOT_FOUND).';
-            else if (/AMBIGUOUS/.test(responseTxt)) reason = 'Multiple matches detected by Claude (AMBIGUOUS).';
-            else reason = (data.error || responseTxt || `HTTP ${res.status}`).slice(0, 200);
+            const reason = (data.error || `HTTP ${res.status}`).slice(0, 200);
             updateBanner(banner, 'error', `Save failed: ${reason}`);
         }
     } catch (e) {
@@ -1439,6 +1971,11 @@ document.getElementById('notesText').addEventListener('input', () => {
 
 // Keyboard navigation
 document.addEventListener('keydown', (e) => {
+    // Slide Sorter is modal: only Escape closes it; swallow everything else
+    if (document.getElementById('sorterOverlay').classList.contains('open')) {
+        if (e.key === 'Escape') { e.preventDefault(); closeSorter(); }
+        return;
+    }
     // Skip navigation shortcuts when editing notes
     const editingNotes = document.activeElement === document.getElementById('notesText');
     if (document.getElementById('startup').classList.contains('hidden')) {
@@ -1448,7 +1985,10 @@ document.addEventListener('keydown', (e) => {
             }
             return; // Let normal typing work
         }
-        if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'PageDown') {
+        if (e.key === 's' || e.key === 'S') {
+            e.preventDefault();
+            openSorter();
+        } else if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'PageDown') {
             e.preventDefault();
             nextSlide();
         } else if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
@@ -1464,9 +2004,9 @@ document.addEventListener('keydown', (e) => {
         } else if (e.key === 't' || e.key === 'T') {
             toggleTimer();
         } else if (e.key === 'Home') {
-            goToSlide(0);
+            goToSlide(firstVisibleIndex());
         } else if (e.key === 'End') {
-            goToSlide(slides.length - 1);
+            goToSlide(prevVisibleIndex(slides.length));
         } else if (e.key === '+' || e.key === '=') {
             changeNotesFontSize(2);
         } else if (e.key === '-') {

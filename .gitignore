@@ -16,6 +16,9 @@ scripts/.browser-session/
 # OS / editor junk
 .DS_Store
 
+# Backup files written by the in-place edit / slide-sorter save mechanism
+*.bak
+
 # Logs (catches .playwright-mcp/console-*.log too)
 *.log
 

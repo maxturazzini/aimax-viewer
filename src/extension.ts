@@ -902,6 +902,186 @@ function urlToWorkspacePath(url: string): { absolute: string; relative: string }
     }
 }
 
+// Resolve a directly-supplied file path (Home Panel case). Mirrors the gates
+// of urlToWorkspacePath() so the save handler can trust both entry points.
+function filePathToWorkspacePath(filePath: string): { absolute: string; relative: string } | null {
+    const ws = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (!ws) return null;
+    if (!filePath) return null;
+    const abs = path.resolve(filePath);
+    if (!abs.startsWith(ws)) return null;
+    if (!abs.toLowerCase().endsWith('.html')) return null;
+    if (!fs.existsSync(abs)) return null;
+    return { absolute: abs, relative: path.relative(ws, abs) };
+}
+
+// Tracks files for which we've already created a .bak in the current session.
+// Reset each activation. The .bak captures the on-disk content right before
+// the FIRST save of the session — subsequent saves never overwrite it.
+const editBackupOnce = new Set<string>();
+
+interface HtmlEditRequest {
+    n: number;
+    oldText: string;
+    newText: string;
+    selector?: string;
+    occurrenceIndex?: number;  // 0-based position of the element among same-text DOM siblings
+    outerHTML?: string;        // full opening tag + text + closing tag (stronger anchor)
+}
+interface HtmlEditOutcome { applied: number[]; failed: { n: number; reason: string }[]; }
+
+// Find every starting offset of `needle` in `hay`. Empty needle returns [].
+function findAllOffsets(hay: string, needle: string): number[] {
+    if (!needle) return [];
+    const out: number[] = [];
+    let i = hay.indexOf(needle);
+    while (i !== -1) {
+        out.push(i);
+        i = hay.indexOf(needle, i + needle.length);
+    }
+    return out;
+}
+
+// Anchored text replace with three levels of disambiguation:
+//   1. oldText is unique → replace directly
+//   2. ambiguous → if outerHTML is also unique, replace inside it
+//   3. still ambiguous → use occurrenceIndex (DOM order ≈ source order) to pick the Nth match
+// On all-fail (0 anywhere, or ambiguous with no occurrenceIndex hint) → reject.
+// Failed edits don't block other edits in the batch.
+function applyHtmlEdits(absolutePath: string, edits: HtmlEditRequest[]): HtmlEditOutcome {
+    const out: HtmlEditOutcome = { applied: [], failed: [] };
+    let source: string;
+    try {
+        source = fs.readFileSync(absolutePath, 'utf8');
+    } catch (err: any) {
+        for (const e of edits) out.failed.push({ n: e.n, reason: 'Read error: ' + (err?.message || err) });
+        return out;
+    }
+    if (!editBackupOnce.has(absolutePath)) {
+        try {
+            fs.writeFileSync(absolutePath + '.bak', source, 'utf8');
+            editBackupOnce.add(absolutePath);
+        } catch (err: any) {
+            for (const e of edits) out.failed.push({ n: e.n, reason: 'Backup failed: ' + (err?.message || err) });
+            return out;
+        }
+    }
+    let working = source;
+    for (const e of edits) {
+        if (typeof e.oldText !== 'string' || typeof e.newText !== 'string') {
+            out.failed.push({ n: e.n, reason: 'Invalid edit payload' });
+            continue;
+        }
+        if (e.oldText === e.newText) {
+            out.applied.push(e.n);
+            continue;
+        }
+
+        // Level 1: unique oldText
+        const positions = findAllOffsets(working, e.oldText);
+        if (positions.length === 1) {
+            const pos = positions[0];
+            working = working.slice(0, pos) + e.newText + working.slice(pos + e.oldText.length);
+            out.applied.push(e.n);
+            continue;
+        }
+        if (positions.length === 0) {
+            out.failed.push({ n: e.n, reason: 'Text not found in source (file changed externally?)' });
+            continue;
+        }
+
+        // Level 2: ambiguous oldText, but unique outerHTML
+        if (typeof e.outerHTML === 'string' && e.outerHTML) {
+            const outerPositions = findAllOffsets(working, e.outerHTML);
+            if (outerPositions.length === 1) {
+                // Find the oldText inside the unique outerHTML match and replace just that
+                const outerPos = outerPositions[0];
+                const inside = working.indexOf(e.oldText, outerPos);
+                if (inside !== -1 && inside < outerPos + e.outerHTML.length) {
+                    working = working.slice(0, inside) + e.newText + working.slice(inside + e.oldText.length);
+                    out.applied.push(e.n);
+                    continue;
+                }
+            }
+        }
+
+        // Level 3: positional fallback via occurrenceIndex (DOM order == source order)
+        if (typeof e.occurrenceIndex === 'number'
+            && e.occurrenceIndex >= 0
+            && e.occurrenceIndex < positions.length) {
+            const pos = positions[e.occurrenceIndex];
+            working = working.slice(0, pos) + e.newText + working.slice(pos + e.oldText.length);
+            out.applied.push(e.n);
+            continue;
+        }
+
+        out.failed.push({
+            n: e.n,
+            reason: `Ambiguous: text appears ${positions.length} times and disambiguators didn't resolve — edit manually`
+        });
+    }
+    if (out.applied.length > 0) {
+        try {
+            fs.writeFileSync(absolutePath, working, 'utf8');
+        } catch (err: any) {
+            const failedAll = out.applied.map(n => ({ n, reason: 'Write error: ' + (err?.message || err) }));
+            return { applied: [], failed: [...failedAll, ...out.failed] };
+        }
+    }
+    return out;
+}
+
+// Full-file overwrite used by the Slide Sorter (reorder / hide-show), which
+// rewrites the whole deck rather than patching individual blocks. Writes a
+// one-per-session .bak first (same policy as applyHtmlEdits) so the original
+// on-disk content is always recoverable.
+function writeDeckFile(absolutePath: string, content: string): { ok: boolean; error?: string } {
+    try {
+        if (!editBackupOnce.has(absolutePath)) {
+            const source = fs.readFileSync(absolutePath, 'utf8');
+            fs.writeFileSync(absolutePath + '.bak', source, 'utf8');
+            editBackupOnce.add(absolutePath);
+        }
+        fs.writeFileSync(absolutePath, content, 'utf8');
+        return { ok: true };
+    } catch (err: any) {
+        return { ok: false, error: err?.message || String(err) };
+    }
+}
+
+// Resolve edit target from either a Browser Panel (url) or Home Panel (filePath)
+// payload. Returns null if not eligible — callers must abort silently.
+function resolveEditTarget(message: any): { absolute: string; relative: string } | null {
+    if (message.url) return urlToWorkspacePath(String(message.url));
+    if (message.filePath) return filePathToWorkspacePath(String(message.filePath));
+    return null;
+}
+
+function handleSaveEdit(message: any, panel: vscode.WebviewPanel | undefined): void {
+    if (!panel) return;
+    const target = resolveEditTarget(message);
+    const edits = Array.isArray(message.edits) ? message.edits as HtmlEditRequest[] : [];
+    if (!target) {
+        panel.webview.postMessage({
+            command: 'saveEditResult',
+            applied: [],
+            failed: edits.map(e => ({ n: e.n, reason: 'File not eligible for edit (not an AIMax-served .html under workspace)' }))
+        });
+        return;
+    }
+    const ws = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (!ws || !target.absolute.startsWith(ws)) {
+        panel.webview.postMessage({
+            command: 'saveEditResult',
+            applied: [],
+            failed: edits.map(e => ({ n: e.n, reason: 'Path escapes workspace' }))
+        });
+        return;
+    }
+    const outcome = applyHtmlEdits(target.absolute, edits);
+    panel.webview.postMessage({ command: 'saveEditResult', ...outcome });
+}
+
 // Canonical Claude Bridge snippet lives in the aimax-bridge skill on GitHub.
 // The extension never inlines it — single source of truth.
 const BRIDGE_SKILL_TEMPLATE_URL =
@@ -1119,6 +1299,8 @@ function openInBrowser(url: string, customTitle?: string) {
                 handleClaudeBridge(message.mode, (message.prompt || '').trim(), (result) => {
                     newPanel.webview.postMessage({ command: 'bridgeResult', ...result });
                 }, { allowEdits: !!message.allowEdits });
+            } else if (message.command === 'saveEdit') {
+                handleSaveEdit(message, newPanel);
             } else if (message.command === 'updateConfig' && message.key) {
                 applyConfigToggle(message.key, message.value);
             }
@@ -1181,6 +1363,8 @@ function openInBrowser(url: string, customTitle?: string) {
                         browserPanel.webview.postMessage({ command: 'bridgeResult', ...result });
                     }
                 }, { allowEdits: !!message.allowEdits });
+            } else if (message.command === 'saveEdit') {
+                handleSaveEdit(message, browserPanel);
             } else if (message.command === 'updateConfig' && message.key) {
                 applyConfigToggle(message.key, message.value);
             }
@@ -1530,6 +1714,22 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
             border-color: #00d4ff;
             background: rgba(0, 212, 255, 0.12);
         }
+        .toolbar-btn.active-edit {
+            color: #ff9500;
+            border-color: #ff9500;
+            background: rgba(255, 149, 0, 0.14);
+        }
+        .toolbar-btn:disabled {
+            opacity: 0.35;
+            cursor: not-allowed;
+        }
+        .annot-window.edit-mode { border-color: #ff9500; }
+        .annot-window.edit-mode .annot-header strong { color: #ff9500; }
+        .annot-window.edit-mode .aimax-comment-only { display: none !important; }
+        .aimax-icon-btn.aimax-save-btn { color: #34c759; border-color: #34c759; padding: 3px 10px; }
+        .aimax-icon-btn.aimax-save-btn:not(:disabled):hover { background: rgba(52, 199, 89, 0.15); }
+        .aimax-icon-btn.aimax-save-btn .save-text { font-size: 11px; font-weight: 600; letter-spacing: 0.3px; }
+        .aimax-icon-btn.notes-active { background: rgba(181, 137, 0, 0.20); border-color: #b58900; color: #ffcc44; }
         .annot-window {
             display: none;
             position: fixed;
@@ -1692,6 +1892,9 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
         <button class="toolbar-btn" id="annotBtn" onclick="toggleAnnotMode()" title="Toggle annotation mode">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#00d4ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
         </button>
+        <button class="toolbar-btn" id="editBtn" onclick="toggleEditMode()" title="Edit text in place (HTML only)" disabled>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ff9500" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+        </button>
         <button class="toolbar-btn" id="bridgeToolbarBtn" onclick="aimaxBridgeToggle()" title="Claude Bridge"><span style="color:#00d4ff;font-size:14px;line-height:1;">&#10042;</span></button>
         <button class="toolbar-btn" onclick="openTerminal()" title="Open new terminal">
             <span style="color: #00d4ff; font-size: 14px;">&gt;</span>
@@ -1704,27 +1907,35 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
     <div class="annot-window" id="annotWindow">
         <div class="annot-header">
             <strong id="annotCount">Annotations (0)</strong>
-            <button class="aimax-icon-btn" onclick="copyAnnotPrompt()" title="Copy prompt">
+            <button class="aimax-icon-btn aimax-edit-only" id="notesBtn" onclick="toggleNotesMode()" style="display:none" title="Toggle speaker notes editing (reveal hidden .speaker-notes blocks)">
+                <span style="font-size:13px;line-height:1">&#128221;</span>
+            </button>
+            <button class="aimax-icon-btn aimax-save-btn" id="saveBtn" onclick="triggerSave()" style="display:none" disabled title="Save pending edits to disk">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+                <span class="save-text">Save</span>
+                <span class="label" id="saveCountLbl">0</span>
+            </button>
+            <button class="aimax-icon-btn aimax-comment-only" onclick="copyAnnotPrompt()" title="Copy prompt">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
             </button>
-            <button class="aimax-icon-btn" onclick="annotSend('terminal')" title="Copy &amp; send to Terminal">
+            <button class="aimax-icon-btn aimax-comment-only" onclick="annotSend('terminal')" title="Copy &amp; send to Terminal">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
                 <span class="label">&gt;_</span>
             </button>
-            <button class="aimax-icon-btn" onclick="annotSend('vscode')" title="Copy &amp; send to Claude Code">
+            <button class="aimax-icon-btn aimax-comment-only" onclick="annotSend('vscode')" title="Copy &amp; send to Claude Code">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
                 <span class="label">&lt;/&gt;</span>
             </button>
-            <button class="aimax-icon-btn" id="annotRunBtn" onclick="annotRun()" title="Run inline (Ask Claude)">
+            <button class="aimax-icon-btn aimax-comment-only" id="annotRunBtn" onclick="annotRun()" title="Run inline (Ask Claude)">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 1.5 L13.6 9.2 L21.3 7.6 L15.7 12 L21.3 16.4 L13.6 14.8 L12 22.5 L10.4 14.8 L2.7 16.4 L8.3 12 L2.7 7.6 L10.4 9.2 Z"/></svg>
             </button>
-            <button class="aimax-icon-btn" onclick="annotRefresh()" title="Refresh page">
+            <button class="aimax-icon-btn aimax-comment-only" onclick="annotRefresh()" title="Refresh page">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3.51-7.13"/><polyline points="21 4 21 10 15 10"/></svg>
             </button>
-            <button class="aimax-icon-btn" onclick="clearAnnotations()" title="Clear all">
+            <button class="aimax-icon-btn aimax-comment-only" onclick="clearAnnotations()" title="Clear all">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>
             </button>
-            <button class="aimax-icon-btn" onclick="toggleAnnotMode(false)" title="Close">
+            <button class="aimax-icon-btn" onclick="closeAnnotPanel()" title="Close">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="6" y1="18" x2="18" y2="6"/></svg>
             </button>
         </div>
@@ -1768,6 +1979,7 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
         <!-- URL actions -->
         <button class="menu-item" onclick="copyUrl()">Copy URL</button>
         <button class="menu-item" id="presentMenuItem" onclick="presentInBrowser()" disabled title="Not a slide deck (need ≥2 &lt;section&gt; elements)">Present in Browser</button>
+        <button class="menu-item" id="presenterModeMenuItem" onclick="togglePresenter()" disabled title="Not a slide deck (need ≥2 &lt;section&gt; elements)">Enter Presenter Mode</button>
         <button class="menu-item" id="makePresentableMenuItem" onclick="makePresentable()" style="display:none;" title="Open Claude Code to convert this file into an AIMax-presentable deck">Make it presentable</button>
         <div class="menu-divider"></div>
         <!-- Open * group -->
@@ -2009,6 +2221,33 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
             toggleMenu();
         }
 
+        // In-panel presenter toggle: swaps the iframe content to the slide
+        // presenter (/__presenter#<deckUrl>) and back, staying inside AIMax Viewer.
+        let presenterActive = false;
+        let deckUrlBeforePresenter = null;
+        function togglePresenter() {
+            if (!presenterActive) {
+                deckUrlBeforePresenter = currentUrl;
+                const presUrl = 'http://127.0.0.1:${serverPort}/__presenter#' + currentUrl;
+                presenterActive = true;
+                navigateToUrl(presUrl);
+            } else {
+                presenterActive = false;
+                if (deckUrlBeforePresenter) navigateToUrl(deckUrlBeforePresenter);
+            }
+            syncPresenterUI();
+            toggleMenu();
+        }
+
+        function syncPresenterUI() {
+            const item = document.getElementById('presenterModeMenuItem');
+            if (item) {
+                item.textContent = presenterActive ? 'Exit Presenter Mode' : 'Enter Presenter Mode';
+                // Keep enabled while active so the user can exit.
+                if (presenterActive) item.disabled = false;
+            }
+        }
+
         function makePresentable() {
             vscode.postMessage({ command: 'makePresentable', url: currentUrl });
             toggleMenu();
@@ -2124,6 +2363,13 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
                     currentUrl = newUrl;
                     updateUrlDisplay(newUrl);
                     updateNavButtons();
+                    // If the user navigated away from the presenter (dropdown,
+                    // back/forward, in-page link), drop presenter state so the
+                    // menu label resets to "Enter Presenter Mode".
+                    if (presenterActive && newUrl.indexOf('/__presenter') === -1) {
+                        presenterActive = false;
+                        syncPresenterUI();
+                    }
                     console.log('[AIMax Nav] Back button disabled?', document.getElementById('backBtn').disabled);
                 } else {
                     console.log('[AIMax Nav] URL unchanged or about:blank, skipping history update');
@@ -2139,6 +2385,7 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
                 detectDeckByFetch(currentUrl);
                 refreshAddBridgeAvailability(currentUrl);
                 refreshSkipAnnotAvailability(currentUrl);
+                refreshEditAvailability(currentUrl);
                 refreshAnnotEmptyMessage();
                 refreshAddressDisplay();
 
@@ -2152,6 +2399,7 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
                 detectDeckByFetch(currentUrl);
                 refreshAddBridgeAvailability(currentUrl);
                 refreshSkipAnnotAvailability(currentUrl);
+                refreshEditAvailability(currentUrl);
                 refreshAnnotEmptyMessage();
                 refreshAddressDisplay();
             }
@@ -2166,17 +2414,25 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
         let _detectToken = 0;
         function detectDeckByFetch(url) {
             const presentItem = document.getElementById('presentMenuItem');
+            const presenterItem = document.getElementById('presenterModeMenuItem');
             const makeItem = document.getElementById('makePresentableMenuItem');
             const myToken = ++_detectToken;
             const setState = (state, sectionCount) => {
                 if (myToken !== _detectToken) return;  // stale
+                const deckTitle = state === 'isDeck'
+                    ? 'Open this deck in the slide presenter'
+                    : (state === 'crossOrigin'
+                        ? 'Cross-origin or unreachable content — cannot inspect for slides'
+                        : 'Not a slide deck (found ' + sectionCount + ' <section>, need ≥2)');
                 if (presentItem) {
                     presentItem.disabled = state !== 'isDeck';
-                    presentItem.title = state === 'isDeck'
-                        ? 'Open this deck in the slide presenter'
-                        : (state === 'crossOrigin'
-                            ? 'Cross-origin or unreachable content — cannot inspect for slides'
-                            : 'Not a slide deck (found ' + sectionCount + ' <section>, need ≥2)');
+                    presentItem.title = deckTitle;
+                }
+                if (presenterItem) {
+                    // Stay enabled while presenter is active (so the user can exit),
+                    // otherwise mirror the deck-detection state.
+                    presenterItem.disabled = !presenterActive && state !== 'isDeck';
+                    presenterItem.title = presenterActive ? 'Return to the normal view' : deckTitle;
                 }
                 if (makeItem) {
                     makeItem.style.display = state === 'notDeck' ? 'block' : 'none';
@@ -2197,31 +2453,181 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
                 .catch(_ => setState('crossOrigin', 0));
         }
 
-        // Run detection at first load too (frame.onload fires after this script,
-        // but if currentUrl is already set we want a result immediately).
-        detectDeckByFetch(currentUrl);
-        refreshAddBridgeAvailability(currentUrl);
-        refreshSkipAnnotAvailability(currentUrl);
-        refreshAddressDisplay();
-        // Empty-state runs after annotations is declared below; defer one tick.
-        setTimeout(() => { try { refreshAnnotEmptyMessage(); } catch (_) {} }, 0);
-
         // Annotation mode state
         let annotActive = false;
+        let editActive = false;
+        let notesActive = false;
         let annotations = [];
+        let pendingEdits = []; // [{n, oldText, newText, selector, href}]
+        let editCounter = 0;
         const annotWindow = document.getElementById('annotWindow');
         const annotBody = document.getElementById('annotBody');
         const annotCount = document.getElementById('annotCount');
         const annotBtn = document.getElementById('annotBtn');
+        const editBtn = document.getElementById('editBtn');
+        const notesBtn = document.getElementById('notesBtn');
+        const saveBtn = document.getElementById('saveBtn');
+        const saveCountLbl = document.getElementById('saveCountLbl');
+
+        // Run detection at first load too (frame.onload fires after this script,
+        // but if currentUrl is already set we want a result immediately).
+        // NOTE: must run AFTER the const/let declarations above — refreshEditAvailability
+        // and the empty-state refresh touch editBtn/annotations, which are in the
+        // temporal dead zone earlier in this script. Calling them before the
+        // declarations throws a ReferenceError that aborts the rest of init
+        // (consts unassigned, message/load listeners never registered), which
+        // silently breaks annotation mode in the browser panel.
+        detectDeckByFetch(currentUrl);
+        refreshAddBridgeAvailability(currentUrl);
+        refreshSkipAnnotAvailability(currentUrl);
+        refreshEditAvailability(currentUrl);
+        refreshAddressDisplay();
+        refreshAnnotEmptyMessage();
+
+        function postFrameToggle() {
+            const on = annotActive || editActive;
+            const mode = editActive ? 'edit' : 'comment';
+            try {
+                frame.contentWindow.postMessage({ type: 'annot:toggle', on: on, mode: mode, notes: notesActive }, '*');
+            } catch (err) {}
+        }
+
+        function syncToggleUI() {
+            annotBtn.classList.toggle('active', annotActive);
+            editBtn.classList.toggle('active-edit', editActive);
+            const open = annotActive || editActive;
+            annotWindow.classList.toggle('open', open);
+            annotWindow.classList.toggle('edit-mode', editActive);
+            // Edit-only chrome
+            document.querySelectorAll('.aimax-edit-only').forEach(el => {
+                el.style.display = editActive ? 'inline-flex' : 'none';
+            });
+            notesBtn.classList.toggle('notes-active', notesActive);
+            updateSaveUI();
+            if (annotActive && !editActive) {
+                annotCount.textContent = 'Annotations (' + annotations.length + ')';
+            } else if (editActive) {
+                annotCount.textContent = notesActive ? 'Edit · Notes' : 'Edit';
+            }
+            if (annotations.length === 0) {
+                refreshAnnotEmptyMessage();
+            }
+        }
+
+        function updateSaveUI() {
+            const n = pendingEdits.length;
+            saveCountLbl.textContent = String(n);
+            saveBtn.disabled = (n === 0);
+            // Save button is visible only inside Edit mode. If user closes the
+            // panel with pending edits, the edits stay in memory (and in DOM);
+            // re-toggling Edit makes the SAVE button reappear so they can flush.
+            saveBtn.style.display = editActive ? 'inline-flex' : 'none';
+        }
 
         function toggleAnnotMode(forceState) {
             const next = (typeof forceState === 'boolean') ? forceState : !annotActive;
             annotActive = next;
-            annotBtn.classList.toggle('active', annotActive);
-            annotWindow.classList.toggle('open', annotActive);
+            if (annotActive && editActive) {
+                // Mutually exclusive: turning Comment on disables Edit
+                editActive = false;
+                notesActive = false;
+            }
+            syncToggleUI();
+            postFrameToggle();
+        }
+
+        function toggleEditMode(forceState) {
+            if (editBtn.disabled) return;
+            const next = (typeof forceState === 'boolean') ? forceState : !editActive;
+            editActive = next;
+            if (editActive && annotActive) {
+                annotActive = false;
+            }
+            if (!editActive) {
+                notesActive = false;
+            }
+            syncToggleUI();
+            postFrameToggle();
+        }
+
+        function toggleNotesMode(forceState) {
+            if (!editActive) return;
+            const next = (typeof forceState === 'boolean') ? forceState : !notesActive;
+            notesActive = next;
+            syncToggleUI();
+            postFrameToggle();
+        }
+
+        function closeAnnotPanel() {
+            annotActive = false;
+            editActive = false;
+            notesActive = false;
+            syncToggleUI();
+            postFrameToggle();
+        }
+
+        function triggerSave() {
+            if (pendingEdits.length === 0) return;
+            saveBtn.disabled = true;
+            vscode.postMessage({
+                command: 'saveEdit',
+                url: currentUrl,
+                edits: pendingEdits.map(e => ({
+                    n: e.n,
+                    oldText: e.oldText,
+                    newText: e.newText,
+                    selector: e.selector,
+                    occurrenceIndex: e.occurrenceIndex,
+                    outerHTML: e.outerHTML
+                }))
+            });
+        }
+
+        function applySaveResult(payload) {
+            const applied = payload.applied || [];
+            const failed = payload.failed || [];
+            applied.forEach(n => {
+                try { frame.contentWindow.postMessage({ type: 'edit:result', n: n, ok: true }, '*'); } catch (e) {}
+            });
+            failed.forEach(f => {
+                try { frame.contentWindow.postMessage({ type: 'edit:result', n: f.n, ok: false, toast: f.reason }, '*'); } catch (e) {}
+            });
+            pendingEdits = pendingEdits.filter(e => !applied.includes(e.n));
+            updateSaveUI();
+            const orig = annotCount.dataset.origText || annotCount.textContent;
+            annotCount.dataset.origText = '';
+            if (failed.length === 0) {
+                annotCount.textContent = '✓ ' + applied.length + ' saved';
+            } else {
+                annotCount.textContent = applied.length + ' saved · ' + failed.length + ' failed';
+            }
+            setTimeout(() => { syncToggleUI(); }, 1800);
+        }
+
+        // Enable Edit toggle only when current URL is an AIMax-served .html file
+        // (mirrors urlToWorkspacePath() gate on the host side).
+        function refreshEditAvailability(url) {
+            let eligible = false;
             try {
-                frame.contentWindow.postMessage({ type: 'annot:toggle', on: annotActive }, '*');
-            } catch (err) {}
+                const u = new URL(url);
+                eligible = (u.hostname === '127.0.0.1' || u.hostname === 'localhost')
+                    && u.port === '${serverPort}'
+                    && !u.pathname.startsWith('/__proxy__/')
+                    && !u.pathname.startsWith('/__presenter')
+                    && !u.pathname.startsWith('/api/')
+                    && u.pathname.toLowerCase().endsWith('.html');
+            } catch (_) {}
+            editBtn.disabled = !eligible;
+            editBtn.title = eligible
+                ? 'Edit text in place (writes to source HTML on disk)'
+                : 'Edit available only on .html files served by AIMax (not .md, proxied, or external)';
+            if (!eligible && editActive) {
+                // URL navigated away from eligible — turn edit off but keep pending edits
+                editActive = false;
+                notesActive = false;
+                syncToggleUI();
+                postFrameToggle();
+            }
         }
 
         function basenameFromUrl(u) {
@@ -2274,6 +2680,11 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
         // either Live Annotation is OFF globally or this host is in the
         // skip list — annotation can't work on that URL until that changes.
         function annotEmptyMessage() {
+            if (editActive) {
+                return notesActive
+                    ? 'Hover a speaker note (yellow block) and click to edit. ⌘↵ to save the edit.'
+                    : 'Hover an element and click to edit its text. ↵ to save the edit.';
+            }
             const base = 'Hover an element and click to add a comment.';
             const tipStyle = 'opacity:0.7;font-size:0.9em';
             let url = currentUrl || '';
@@ -2514,8 +2925,26 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
                 renderAnnotations();
             } else if (event.data?.type === 'annot:remove' && typeof event.data.n === 'number') {
                 removeAnnotation(event.data.n);
+            } else if (event.data?.type === 'edit:save') {
+                editCounter = Math.max(editCounter, event.data.n || 0);
+                pendingEdits.push({
+                    n: event.data.n,
+                    oldText: event.data.oldText,
+                    newText: event.data.newText,
+                    selector: event.data.selector,
+                    occurrenceIndex: event.data.occurrenceIndex,
+                    outerHTML: event.data.outerHTML,
+                    href: event.data.href,
+                    notes: !!event.data.notes
+                });
+                updateSaveUI();
+            } else if (event.data?.type === 'edit:remove' && typeof event.data.n === 'number') {
+                pendingEdits = pendingEdits.filter(e => e.n !== event.data.n);
+                updateSaveUI();
             } else if (event.data?.command === 'bridgeResult') {
                 aimaxBridgeOnResult(event.data);
+            } else if (event.data?.command === 'saveEditResult') {
+                applySaveResult(event.data);
             } else if (event.data?.command === 'presentFile' && event.data.url) {
                 vscode.postMessage({ command: 'presentFile', url: event.data.url });
             } else if (event.data?.command === 'openExternal' && event.data.url) {
@@ -2529,8 +2958,8 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
         // Also inject Cmd/Ctrl+C handler so text selection inside iframe can be copied
         // (VS Code webview intercepts keyboard shortcuts; we forward selection to host)
         frame.addEventListener('load', () => {
-            if (annotActive) {
-                try { frame.contentWindow.postMessage({ type: 'annot:toggle', on: true }, '*'); } catch (e) {}
+            if (annotActive || editActive) {
+                postFrameToggle();
             }
             try {
                 const doc = frame.contentDocument;
@@ -2775,6 +3204,75 @@ function startHttpServer(workspaceFolder: string) {
                     res.writeHead(status, headers);
                     res.end(JSON.stringify(result));
                 }, { allowEdits });
+            });
+            return;
+        }
+
+        // Direct save of speaker-notes edits from the in-panel presenter.
+        // Body: { url, oldText, newText }. Resolves the deck file via the same
+        // gate as Edit mode (urlToWorkspacePath) and applies an anchored
+        // text replace via applyHtmlEdits (writes a one-per-session .bak first).
+        if (url === '/__save-notes' && req.method === 'POST') {
+            let body = '';
+            req.on('data', (chunk: Buffer) => { body += chunk.toString(); });
+            req.on('end', () => {
+                const headers: Record<string, string> = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' };
+                let parsed: any;
+                try { parsed = JSON.parse(body); } catch {
+                    res.writeHead(400, headers);
+                    res.end(JSON.stringify({ ok: false, error: 'Invalid JSON' }));
+                    return;
+                }
+                const target = urlToWorkspacePath(String(parsed.url || ''));
+                if (!target) {
+                    res.writeHead(400, headers);
+                    res.end(JSON.stringify({ ok: false, error: 'Deck not an AIMax-served .html under this workspace' }));
+                    return;
+                }
+                if (typeof parsed.oldText !== 'string' || typeof parsed.newText !== 'string') {
+                    res.writeHead(400, headers);
+                    res.end(JSON.stringify({ ok: false, error: 'Missing oldText/newText' }));
+                    return;
+                }
+                const outcome = applyHtmlEdits(target.absolute, [{ n: 1, oldText: parsed.oldText, newText: parsed.newText }]);
+                const ok = outcome.applied.length === 1;
+                res.writeHead(ok ? 200 : 409, headers);
+                res.end(JSON.stringify({
+                    ok,
+                    error: ok ? undefined : (outcome.failed[0]?.reason || 'Save failed')
+                }));
+            });
+            return;
+        }
+
+        // Full-file save of a deck from the Slide Sorter (reorder / hide-show).
+        // Body: { url, content }. Resolves the deck via the same gate as Edit
+        // mode and overwrites the file (one-per-session .bak written first).
+        if (url === '/__save-deck' && req.method === 'POST') {
+            let body = '';
+            req.on('data', (chunk: Buffer) => { body += chunk.toString(); });
+            req.on('end', () => {
+                const headers: Record<string, string> = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' };
+                let parsed: any;
+                try { parsed = JSON.parse(body); } catch {
+                    res.writeHead(400, headers);
+                    res.end(JSON.stringify({ ok: false, error: 'Invalid JSON' }));
+                    return;
+                }
+                const target = urlToWorkspacePath(String(parsed.url || ''));
+                if (!target) {
+                    res.writeHead(400, headers);
+                    res.end(JSON.stringify({ ok: false, error: 'Deck not an AIMax-served .html under this workspace' }));
+                    return;
+                }
+                if (typeof parsed.content !== 'string' || !parsed.content) {
+                    res.writeHead(400, headers);
+                    res.end(JSON.stringify({ ok: false, error: 'Missing content' }));
+                    return;
+                }
+                const outcome = writeDeckFile(target.absolute, parsed.content);
+                res.writeHead(outcome.ok ? 200 : 500, headers);
+                res.end(JSON.stringify(outcome));
             });
             return;
         }
@@ -3148,6 +3646,8 @@ function openArtifactsHome(workspaceFolder: string, homePage: string = 'Artifact
                         homePanel.webview.postMessage({ command: 'bridgeResult', ...result });
                     }
                 }, { allowEdits: !!message.allowEdits });
+            } else if (message.command === 'saveEdit') {
+                handleSaveEdit(message, homePanel);
             }
         });
     }
@@ -3232,6 +3732,22 @@ function wrapWithToolbarAndLinkHandler(html: string, title: string, faviconUri: 
             border-color: #00d4ff;
             background: rgba(0, 212, 255, 0.12);
         }
+        .aimax-toolbar-btn.active-edit {
+            color: #ff9500;
+            border-color: #ff9500;
+            background: rgba(255, 149, 0, 0.14);
+        }
+        .aimax-toolbar-btn:disabled {
+            opacity: 0.35;
+            cursor: not-allowed;
+        }
+        .aimax-annot-window.edit-mode { border-color: #ff9500; }
+        .aimax-annot-window.edit-mode .aimax-annot-header strong { color: #ff9500; }
+        .aimax-annot-window.edit-mode .aimax-comment-only { display: none !important; }
+        .aimax-icon-btn.aimax-save-btn { color: #34c759; border-color: #34c759; padding: 3px 10px; }
+        .aimax-icon-btn.aimax-save-btn:not(:disabled):hover { background: rgba(52, 199, 89, 0.15); }
+        .aimax-icon-btn.aimax-save-btn .save-text { font-size: 11px; font-weight: 600; letter-spacing: 0.3px; }
+        .aimax-icon-btn.notes-active { background: rgba(181, 137, 0, 0.20); border-color: #b58900; color: #ffcc44; }
         .aimax-content-wrapper {
             padding-top: 44px;
         }
@@ -3385,6 +3901,9 @@ function wrapWithToolbarAndLinkHandler(html: string, title: string, faviconUri: 
         <button class="aimax-toolbar-btn" id="aimaxAnnotBtn" onclick="aimaxToggleAnnot()" title="Toggle annotation mode">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#00d4ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
         </button>
+        <button class="aimax-toolbar-btn" id="aimaxEditBtn" onclick="aimaxToggleEdit()" title="Edit text in place (HTML only)" disabled>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ff9500" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+        </button>
         <button class="aimax-toolbar-btn" onclick="openTerminal()" title="Open new terminal">
             <span style="font-family: monospace; font-weight: bold;">&gt;_</span>
         </button>
@@ -3395,27 +3914,35 @@ function wrapWithToolbarAndLinkHandler(html: string, title: string, faviconUri: 
     <div class="aimax-annot-window" id="aimaxAnnotWindow" data-aimax-overlay="1">
         <div class="aimax-annot-header">
             <strong id="aimaxAnnotCount">Annotations (0)</strong>
-            <button class="aimax-icon-btn" onclick="aimaxCopyAnnotPrompt()" title="Copy prompt">
+            <button class="aimax-icon-btn aimax-edit-only" id="aimaxNotesBtn" onclick="aimaxToggleNotes()" style="display:none" title="Toggle speaker notes editing (reveal hidden .speaker-notes blocks)">
+                <span style="font-size:13px;line-height:1">&#128221;</span>
+            </button>
+            <button class="aimax-icon-btn aimax-save-btn" id="aimaxSaveBtn" onclick="aimaxTriggerSave()" style="display:none" disabled title="Save pending edits to disk">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+                <span class="save-text">Save</span>
+                <span class="label" id="aimaxSaveCountLbl">0</span>
+            </button>
+            <button class="aimax-icon-btn aimax-comment-only" onclick="aimaxCopyAnnotPrompt()" title="Copy prompt">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
             </button>
-            <button class="aimax-icon-btn" onclick="aimaxAnnotSend('terminal')" title="Copy &amp; send to Terminal">
+            <button class="aimax-icon-btn aimax-comment-only" onclick="aimaxAnnotSend('terminal')" title="Copy &amp; send to Terminal">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
                 <span class="label">&gt;_</span>
             </button>
-            <button class="aimax-icon-btn" onclick="aimaxAnnotSend('vscode')" title="Copy &amp; send to Claude Code">
+            <button class="aimax-icon-btn aimax-comment-only" onclick="aimaxAnnotSend('vscode')" title="Copy &amp; send to Claude Code">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
                 <span class="label">&lt;/&gt;</span>
             </button>
-            <button class="aimax-icon-btn" id="aimaxAnnotRunBtn" onclick="aimaxAnnotRun()" title="Run inline (Ask Claude)">
+            <button class="aimax-icon-btn aimax-comment-only" id="aimaxAnnotRunBtn" onclick="aimaxAnnotRun()" title="Run inline (Ask Claude)">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 1.5 L13.6 9.2 L21.3 7.6 L15.7 12 L21.3 16.4 L13.6 14.8 L12 22.5 L10.4 14.8 L2.7 16.4 L8.3 12 L2.7 7.6 L10.4 9.2 Z"/></svg>
             </button>
-            <button class="aimax-icon-btn" onclick="aimaxAnnotRefresh()" title="Refresh page">
+            <button class="aimax-icon-btn aimax-comment-only" onclick="aimaxAnnotRefresh()" title="Refresh page">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3.51-7.13"/><polyline points="21 4 21 10 15 10"/></svg>
             </button>
-            <button class="aimax-icon-btn" onclick="aimaxClearAnnot()" title="Clear all">
+            <button class="aimax-icon-btn aimax-comment-only" onclick="aimaxClearAnnot()" title="Clear all">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>
             </button>
-            <button class="aimax-icon-btn" onclick="aimaxToggleAnnot(false)" title="Close">
+            <button class="aimax-icon-btn" onclick="aimaxCloseAnnotPanel()" title="Close">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="6" y1="18" x2="18" y2="6"/></svg>
             </button>
         </div>
@@ -3480,18 +4007,136 @@ function wrapWithToolbarAndLinkHandler(html: string, title: string, faviconUri: 
 
         // Annotation mode (Home Panel: same-document, no iframe)
         let aimaxAnnotActive = false;
+        let aimaxEditActive = false;
+        let aimaxNotesActive = false;
         let aimaxAnnotations = [];
+        let aimaxPendingEdits = [];
         const aimaxAnnotWindow = document.getElementById('aimaxAnnotWindow');
         const aimaxAnnotBody = document.getElementById('aimaxAnnotBody');
         const aimaxAnnotCount = document.getElementById('aimaxAnnotCount');
         const aimaxAnnotBtn = document.getElementById('aimaxAnnotBtn');
+        const aimaxEditBtn = document.getElementById('aimaxEditBtn');
+        const aimaxNotesBtn = document.getElementById('aimaxNotesBtn');
+        const aimaxSaveBtn = document.getElementById('aimaxSaveBtn');
+        const aimaxSaveCountLbl = document.getElementById('aimaxSaveCountLbl');
+
+        function aimaxPostToggle() {
+            const on = aimaxAnnotActive || aimaxEditActive;
+            const mode = aimaxEditActive ? 'edit' : 'comment';
+            window.postMessage({ type: 'annot:toggle', on: on, mode: mode, notes: aimaxNotesActive }, '*');
+        }
+
+        function aimaxSyncToggleUI() {
+            aimaxAnnotBtn.classList.toggle('active', aimaxAnnotActive);
+            aimaxEditBtn.classList.toggle('active-edit', aimaxEditActive);
+            const open = aimaxAnnotActive || aimaxEditActive;
+            aimaxAnnotWindow.classList.toggle('open', open);
+            aimaxAnnotWindow.classList.toggle('edit-mode', aimaxEditActive);
+            document.querySelectorAll('.aimax-edit-only').forEach(el => {
+                el.style.display = aimaxEditActive ? 'inline-flex' : 'none';
+            });
+            aimaxNotesBtn.classList.toggle('notes-active', aimaxNotesActive);
+            aimaxUpdateSaveUI();
+            if (aimaxAnnotActive && !aimaxEditActive) {
+                aimaxAnnotCount.textContent = 'Annotations (' + aimaxAnnotations.length + ')';
+            } else if (aimaxEditActive) {
+                aimaxAnnotCount.textContent = aimaxNotesActive ? 'Edit · Notes' : 'Edit';
+            }
+            if (aimaxAnnotations.length === 0) {
+                aimaxRenderAnnot();
+            }
+        }
+
+        function aimaxUpdateSaveUI() {
+            const n = aimaxPendingEdits.length;
+            aimaxSaveCountLbl.textContent = String(n);
+            aimaxSaveBtn.disabled = (n === 0);
+            aimaxSaveBtn.style.display = aimaxEditActive ? 'inline-flex' : 'none';
+        }
 
         function aimaxToggleAnnot(forceState) {
             const next = (typeof forceState === 'boolean') ? forceState : !aimaxAnnotActive;
             aimaxAnnotActive = next;
-            aimaxAnnotBtn.classList.toggle('active', aimaxAnnotActive);
-            aimaxAnnotWindow.classList.toggle('open', aimaxAnnotActive);
-            window.postMessage({ type: 'annot:toggle', on: aimaxAnnotActive }, '*');
+            if (aimaxAnnotActive && aimaxEditActive) {
+                aimaxEditActive = false;
+                aimaxNotesActive = false;
+            }
+            aimaxSyncToggleUI();
+            aimaxPostToggle();
+        }
+
+        function aimaxToggleEdit(forceState) {
+            if (aimaxEditBtn.disabled) return;
+            const next = (typeof forceState === 'boolean') ? forceState : !aimaxEditActive;
+            aimaxEditActive = next;
+            if (aimaxEditActive && aimaxAnnotActive) {
+                aimaxAnnotActive = false;
+            }
+            if (!aimaxEditActive) {
+                aimaxNotesActive = false;
+            }
+            aimaxSyncToggleUI();
+            aimaxPostToggle();
+        }
+
+        function aimaxToggleNotes(forceState) {
+            if (!aimaxEditActive) return;
+            const next = (typeof forceState === 'boolean') ? forceState : !aimaxNotesActive;
+            aimaxNotesActive = next;
+            aimaxSyncToggleUI();
+            aimaxPostToggle();
+        }
+
+        function aimaxCloseAnnotPanel() {
+            aimaxAnnotActive = false;
+            aimaxEditActive = false;
+            aimaxNotesActive = false;
+            aimaxSyncToggleUI();
+            aimaxPostToggle();
+        }
+
+        function aimaxTriggerSave() {
+            if (aimaxPendingEdits.length === 0) return;
+            aimaxSaveBtn.disabled = true;
+            vscode.postMessage({
+                command: 'saveEdit',
+                filePath: aimaxKnownFilePath,
+                edits: aimaxPendingEdits.map(e => ({
+                    n: e.n,
+                    oldText: e.oldText,
+                    newText: e.newText,
+                    selector: e.selector,
+                    occurrenceIndex: e.occurrenceIndex,
+                    outerHTML: e.outerHTML
+                }))
+            });
+        }
+
+        function aimaxApplySaveResult(payload) {
+            const applied = payload.applied || [];
+            const failed = payload.failed || [];
+            applied.forEach(n => {
+                window.postMessage({ type: 'edit:result', n: n, ok: true }, '*');
+            });
+            failed.forEach(f => {
+                window.postMessage({ type: 'edit:result', n: f.n, ok: false, toast: f.reason }, '*');
+            });
+            aimaxPendingEdits = aimaxPendingEdits.filter(e => !applied.includes(e.n));
+            aimaxUpdateSaveUI();
+            const txt = (failed.length === 0)
+                ? ('✓ ' + applied.length + ' saved')
+                : (applied.length + ' saved · ' + failed.length + ' failed');
+            aimaxAnnotCount.textContent = txt;
+            setTimeout(() => { aimaxSyncToggleUI(); }, 1800);
+        }
+
+        function aimaxRefreshEditAvailability() {
+            const eligible = !!aimaxKnownFilePath
+                && aimaxKnownFilePath.toLowerCase().endsWith('.html');
+            aimaxEditBtn.disabled = !eligible;
+            aimaxEditBtn.title = eligible
+                ? 'Edit text in place (writes to source HTML on disk)'
+                : 'Edit available only on .html files served by AIMax';
         }
 
         function aimaxEsc(s) {
@@ -3532,9 +4177,16 @@ function wrapWithToolbarAndLinkHandler(html: string, title: string, faviconUri: 
         }
 
         function aimaxRenderAnnot() {
-            aimaxAnnotCount.textContent = 'Annotations (' + aimaxAnnotations.length + ')';
+            if (!aimaxEditActive) {
+                aimaxAnnotCount.textContent = 'Annotations (' + aimaxAnnotations.length + ')';
+            }
             if (aimaxAnnotations.length === 0) {
-                aimaxAnnotBody.innerHTML = '<div class="aimax-annot-empty">Hover an element and click to add a comment.</div>';
+                const msg = aimaxEditActive
+                    ? (aimaxNotesActive
+                        ? 'Hover a speaker note (yellow block) and click to edit. ⌘↵ to save the edit.'
+                        : 'Hover an element and click to edit its text. ↵ to save the edit.')
+                    : 'Hover an element and click to add a comment.';
+                aimaxAnnotBody.innerHTML = '<div class="aimax-annot-empty">' + msg + '</div>';
                 return;
             }
             const rows = aimaxAnnotations.map((a, i) => {
@@ -3637,10 +4289,29 @@ function wrapWithToolbarAndLinkHandler(html: string, title: string, faviconUri: 
                 aimaxRenderAnnot();
             } else if (event.data?.type === 'annot:remove' && typeof event.data.n === 'number') {
                 aimaxRemoveAnnot(event.data.n);
+            } else if (event.data?.type === 'edit:save') {
+                aimaxPendingEdits.push({
+                    n: event.data.n,
+                    oldText: event.data.oldText,
+                    newText: event.data.newText,
+                    selector: event.data.selector,
+                    occurrenceIndex: event.data.occurrenceIndex,
+                    outerHTML: event.data.outerHTML,
+                    href: aimaxKnownFilePath,
+                    notes: !!event.data.notes
+                });
+                aimaxUpdateSaveUI();
+            } else if (event.data?.type === 'edit:remove' && typeof event.data.n === 'number') {
+                aimaxPendingEdits = aimaxPendingEdits.filter(e => e.n !== event.data.n);
+                aimaxUpdateSaveUI();
             } else if (event.data?.command === 'bridgeResult') {
                 aimaxOnBridgeResult(event.data);
+            } else if (event.data?.command === 'saveEditResult') {
+                aimaxApplySaveResult(event.data);
             }
         });
+
+        aimaxRefreshEditAvailability();
 
         // Inline annotation client (same-document mode)
         ${ANNOTATION_CLIENT_JS}
