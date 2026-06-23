@@ -21,6 +21,12 @@ export const ANNOTATION_CLIENT_JS = `
     var counter = 0;
     var badges = []; // [{ n, el, node, variant }]
     var notesStyleEl = null;
+    // In edit mode the user types directly into text leaves (contenteditable).
+    // We snapshot each leaf's original state when it gains focus so we can diff
+    // on blur — by SAVE time the DOM has been mutated, so oldText/occIndex/
+    // outerHTML must come from the pre-edit snapshot, not the live DOM.
+    var editOriginals = new WeakMap(); // el -> { oldText, occIndex, outerHTML }
+    var editableLeaves = []; // currently-contenteditable elements (for cleanup)
 
     var SENTINEL = 'data-aimax-overlay';
 
@@ -46,7 +52,9 @@ export const ANNOTATION_CLIENT_JS = `
         '.__aimax-toast.error { background: #cc2222; }',
         '.__aimax-toast.success { background: #2a8f3a; }',
         'body.__aimax-active, body.__aimax-active * { cursor: crosshair !important; }',
-        'body.__aimax-active.edit, body.__aimax-active.edit * { cursor: text !important; }'
+        'body.__aimax-active.edit, body.__aimax-active.edit * { cursor: text !important; }',
+        '.__aimax-editable { outline: 2px dashed rgba(255,149,0,0.55) !important; outline-offset: 3px; border-radius: 3px; }',
+        '.__aimax-editable:focus { outline: 2px solid #ff9500 !important; background: rgba(255,149,0,0.08); }'
     ].join('\\n');
     document.documentElement.appendChild(styleEl);
 
@@ -79,7 +87,7 @@ export const ANNOTATION_CLIENT_JS = `
 
     function autoGrow() {
         inputField.style.height = 'auto';
-        var cap = (mode === 'edit' && notesActive) ? 400 : 200;
+        var cap = 200; // comment popup only
         inputField.style.height = Math.min(inputField.scrollHeight, cap) + 'px';
         if (inputField.scrollHeight > cap) {
             inputField.style.overflowY = 'auto';
@@ -125,14 +133,6 @@ export const ANNOTATION_CLIENT_JS = `
         return false;
     }
 
-    function closestSpeakerNotes(el) {
-        while (el && el !== document.body) {
-            if (el.classList && el.classList.contains('speaker-notes')) return el;
-            el = el.parentNode;
-        }
-        return null;
-    }
-
     // Compute the 0-based index of el among all DOM elements whose
     // textContent matches and which have no element children.
     // The extension host uses this as a tie-breaker when the same text
@@ -150,6 +150,170 @@ export const ANNOTATION_CLIENT_JS = `
             idx++;
         }
         return -1;
+    }
+
+    // A text leaf is eligible for direct editing if it has text, no element
+    // children, isn't part of our own overlay UI, and — in notes sub-mode —
+    // lives inside a .speaker-notes block. Mirrors the click-handler gates.
+    function isEditableLeaf(el) {
+        if (!el || el.nodeType !== 1) return false;
+        if (isOverlay(el)) return false;
+        if (hasElementChildren(el)) return false;
+        if (!(el.textContent || '').trim()) return false;
+        if (notesActive && !isInsideSpeakerNotes(el)) return false;
+        return true;
+    }
+
+    function snapshotLeaf(el) {
+        var oldText = el.textContent || '';
+        editOriginals.set(el, {
+            oldText: oldText,
+            occIndex: occurrenceIndexInDom(el, oldText),
+            outerHTML: el.outerHTML
+        });
+    }
+
+    // Snapshot a wrapper span standing in for a bare text node inside a mixed
+    // element (e.g. "Context switching kills " in <h2>...<span>x</span></h2>).
+    // The diff anchors on the PLAIN text fragment — which exists verbatim in the
+    // source — not on the temporary span (which never reaches disk). We carry
+    // the source fragment in __aimaxFragment so the surrounding whitespace the
+    // user might trim still maps back to the original bytes.
+    function snapshotFragment(span) {
+        var oldText = span.getAttribute('data-aimax-frag') || (span.textContent || '');
+        editOriginals.set(span, {
+            oldText: oldText,
+            occIndex: -1,        // text fragments aren't whole-element leaves; rely on uniqueness/outerHTML
+            outerHTML: null,
+            fragment: true
+        });
+    }
+
+    // True for inline elements that are themselves pure-text leaves living
+    // inside a parent that has other element children — these already pass
+    // isEditableLeaf, so enableInlineEditing handles them directly.
+
+    // Wrap each bare (non-whitespace) text node child of a mixed element in an
+    // editable span. Returns the created spans. Used only inside edit mode and
+    // unwrapped on disable so the served DOM is restored.
+    function wrapBareTextNodes(parent) {
+        var made = [];
+        var nodes = [];
+        for (var i = 0; i < parent.childNodes.length; i++) nodes.push(parent.childNodes[i]);
+        for (var j = 0; j < nodes.length; j++) {
+            var node = nodes[j];
+            if (node.nodeType !== 3) continue;            // text nodes only
+            if (!(node.nodeValue || '').trim()) continue; // skip pure whitespace
+            var span = document.createElement('span');
+            span.className = '__aimax-editable __aimax-frag';
+            span.setAttribute(SENTINEL, '1');
+            span.setAttribute('data-aimax-frag', node.nodeValue);
+            span.setAttribute('contenteditable', 'true');
+            span.textContent = node.nodeValue;
+            parent.replaceChild(span, node);
+            made.push(span);
+        }
+        return made;
+    }
+
+    function unwrapFragmentSpan(span) {
+        if (!span.parentNode) return;
+        // Replace the span with a plain text node carrying its current text, so
+        // an unsaved edit stays visible but the temporary span markup is gone.
+        var tn = document.createTextNode(span.textContent || '');
+        span.parentNode.replaceChild(tn, span);
+    }
+
+    function enableInlineEditing() {
+        editableLeaves = [];
+        var all = document.body ? document.body.getElementsByTagName('*') : [];
+        var candidates = [];
+        for (var i = 0; i < all.length; i++) candidates.push(all[i]);
+        for (var j = 0; j < candidates.length; j++) {
+            var el = candidates[j];
+            if (isOverlay(el)) continue;
+            if (notesActive && !isInsideSpeakerNotes(el)) continue;
+            if (isEditableLeaf(el)) {
+                // Pure-text leaf: edit the element directly.
+                el.setAttribute('contenteditable', 'true');
+                el.classList.add('__aimax-editable');
+                editableLeaves.push(el);
+            } else if (hasElementChildren(el) && hasBareTextChild(el)) {
+                // Mixed element: wrap its bare text fragments so each becomes an
+                // independently-editable sub-node (keeps inline tags intact).
+                var spans = wrapBareTextNodes(el);
+                for (var k = 0; k < spans.length; k++) editableLeaves.push(spans[k]);
+            }
+        }
+    }
+
+    function hasBareTextChild(el) {
+        if (!el || !el.childNodes) return false;
+        for (var i = 0; i < el.childNodes.length; i++) {
+            var n = el.childNodes[i];
+            if (n.nodeType === 3 && (n.nodeValue || '').trim()) return true;
+        }
+        return false;
+    }
+
+    function disableInlineEditing() {
+        for (var i = 0; i < editableLeaves.length; i++) {
+            var el = editableLeaves[i];
+            if (el.classList && el.classList.contains('__aimax-frag')) {
+                unwrapFragmentSpan(el);
+            } else {
+                el.removeAttribute('contenteditable');
+                el.classList.remove('__aimax-editable');
+            }
+        }
+        editableLeaves = [];
+        editOriginals = new WeakMap();
+    }
+
+    // Diff a leaf against its focus-in snapshot and, if changed, post an
+    // edit:save payload (same shape the old popup flow produced) and drop a ✏
+    // badge. Re-baselines the snapshot so a second edit diffs cleanly.
+    function captureLeafEdit(el) {
+        var snap = editOriginals.get(el);
+        if (!snap) return;
+        var newText = el.textContent || '';
+        if (snap.fragment) {
+            // The source fragment may carry leading/trailing whitespace between
+            // tags (e.g. "Context switching kills "). The user edits only the
+            // visible words, so re-attach the original edge whitespace so the
+            // verbatim source replace still matches and round-trips.
+            var orig = snap.oldText;
+            var lead = (orig.match(/^\\s*/) || [''])[0];
+            var trail = (orig.match(/\\s*$/) || [''])[0];
+            newText = lead + newText.replace(/^\\s+|\\s+$/g, '') + trail;
+        }
+        if (newText === snap.oldText) return;
+        if (!newText.trim()) {
+            el.textContent = snap.oldText;
+            showToast('Empty text — reverted', 'error');
+            return;
+        }
+        counter += 1;
+        placeBadge(el, counter, 'edit');
+        var payload = {
+            type: 'edit:save',
+            n: counter,
+            selector: buildSelector(el),
+            oldText: snap.oldText,
+            newText: newText,
+            occurrenceIndex: snap.occIndex,
+            outerHTML: snap.outerHTML,
+            href: location.href,
+            notes: notesActive
+        };
+        try { window.parent.postMessage(payload, '*'); } catch (err) {}
+        // Re-baseline against what we just sent so a second edit diffs cleanly.
+        if (snap.fragment) {
+            el.setAttribute('data-aimax-frag', newText);
+            snapshotFragment(el);
+        } else {
+            snapshotLeaf(el);
+        }
     }
 
     function showToast(text, level) {
@@ -261,32 +425,24 @@ export const ANNOTATION_CLIENT_JS = `
         label.style.display = 'none';
     }
 
+    // Popup is comment-mode only now; edit mode types directly into the leaf.
     function showInput(el) {
         var rect = el.getBoundingClientRect();
         inputBox.style.display = 'block';
-        var isNotes = (mode === 'edit' && notesActive);
-        inputBox.className = '__aimax-input' + (isNotes ? ' notes' : '');
+        inputBox.className = '__aimax-input';
         inputBox.setAttribute(SENTINEL, '1');
-
-        if (mode === 'edit') {
-            inputField.value = (el.textContent || '').replace(/\\u00A0/g, ' ');
-            inputField.rows = isNotes ? 5 : 1;
-            inputField.placeholder = isNotes ? 'Edit note — ⌘↵ to save' : 'Edit text — ↵ to save';
-        } else {
-            inputField.value = '';
-            inputField.rows = 1;
-            inputField.placeholder = 'Add a comment...';
-        }
+        inputField.value = '';
+        inputField.rows = 1;
+        inputField.placeholder = 'Add a comment...';
         inputField.style.height = 'auto';
         inputField.style.overflowY = 'hidden';
         autoGrow();
 
         var vw = window.innerWidth, vh = window.innerHeight;
-        var boxW = isNotes ? 480 : 280;
         var ix = rect.left;
-        var iy = rect.top - (isNotes ? 80 : 50);
+        var iy = rect.top - 50;
         if (iy < 8) iy = rect.bottom + 8;
-        if (ix < 10 || ix > vw - boxW || iy < 10 || iy > vh - 50) { ix = 10; iy = 10; }
+        if (ix < 10 || ix > vw - 280 || iy < 10 || iy > vh - 50) { ix = 10; iy = 10; }
         inputBox.style.left = ix + 'px';
         inputBox.style.top = iy + 'px';
         setTimeout(function() { inputField.focus(); inputField.select && inputField.select(); }, 0);
@@ -374,6 +530,7 @@ export const ANNOTATION_CLIENT_JS = `
 
     function onMouseMove(e) {
         if (!active || pinnedTarget) return;
+        if (mode === 'edit') return; // contenteditable outline replaces hover overlay
         var t = document.elementFromPoint(e.clientX, e.clientY);
         if (!t || isOverlay(t)) return;
         if (t === hoverTarget) return;
@@ -383,31 +540,14 @@ export const ANNOTATION_CLIENT_JS = `
 
     function onClick(e) {
         if (!active) return;
+        // Edit mode uses direct contenteditable typing — let clicks place the
+        // caret in the leaf instead of pinning a popup.
+        if (mode === 'edit') return;
         if (isOverlay(e.target)) return;
         e.preventDefault();
         e.stopPropagation();
         var t = e.target;
         if (!t || isOverlay(t)) return;
-
-        if (mode === 'edit') {
-            if (notesActive) {
-                var noteEl = closestSpeakerNotes(t);
-                if (!noteEl) {
-                    showToast('Not a speaker note', 'error');
-                    return;
-                }
-                t = noteEl;
-            }
-            if (hasElementChildren(t)) {
-                showToast('Plain text elements only', 'error');
-                return;
-            }
-            var txt = (t.textContent || '').trim();
-            if (!txt) {
-                showToast('Element has no text', 'error');
-                return;
-            }
-        }
 
         pinnedTarget = t;
         showOverlay(t);
@@ -435,66 +575,103 @@ export const ANNOTATION_CLIENT_JS = `
         hoverTarget = null;
     }
 
-    function submitEdit() {
-        var el = pinnedTarget;
-        if (!el) { hideInput(); hideOverlay(); return; }
-        var newText = inputField.value;
-        var oldText = el.textContent || '';
-        if (newText === oldText) {
-            showToast('No change', 'info');
-            hideInput();
-            hideOverlay();
-            hoverTarget = null;
-            return;
-        }
-        // Capture occurrenceIndex and outerHTML BEFORE mutating the DOM —
-        // after we overwrite textContent, the element no longer matches
-        // oldText and the search would miss it.
-        var occIndex = occurrenceIndexInDom(el, oldText);
-        var oldOuterHTML = el.outerHTML;
-        // Apply DOM immediately for visual feedback. Persistence happens on SAVE.
-        el.textContent = newText;
-        counter += 1;
-        placeBadge(el, counter, 'edit');
-        var payload = {
-            type: 'edit:save',
-            n: counter,
-            selector: buildSelector(el),
-            oldText: oldText,
-            newText: newText,
-            occurrenceIndex: occIndex,
-            outerHTML: oldOuterHTML,
-            href: location.href,
-            notes: notesActive
-        };
-        try { window.parent.postMessage(payload, '*'); } catch (err) {}
-        hideInput();
-        hideOverlay();
-        hoverTarget = null;
-    }
-
+    // The popup is comment-only now (edit mode types directly into leaves).
     inputField.addEventListener('keydown', function(e) {
-        var isNotes = (mode === 'edit' && notesActive);
-        var submitGesture = isNotes
-            ? ((e.key === 'Enter') && (e.metaKey || e.ctrlKey))
-            : ((e.key === 'Enter') && !e.shiftKey);
-
-        if (submitGesture) {
+        if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
-            if (mode === 'edit') {
-                submitEdit();
-            } else {
-                submitComment();
-            }
+            submitComment();
         } else if (e.key === 'Escape') {
             e.preventDefault();
             hideInput();
         }
-        // In notes mode plain Enter inserts a newline (default behavior).
     });
 
     document.addEventListener('mousemove', onMouseMove, true);
     document.addEventListener('click', onClick, true);
+
+    // ---- Direct in-place editing (edit mode) ----
+    // Snapshot a leaf when it gains focus so blur can diff against the original.
+    function onEditFocusIn(e) {
+        if (!active || mode !== 'edit') return;
+        var el = e.target;
+        if (!el || !el.classList || !el.classList.contains('__aimax-editable')) return;
+        if (editOriginals.has(el)) return;
+        if (el.classList.contains('__aimax-frag')) {
+            snapshotFragment(el);
+        } else {
+            snapshotLeaf(el);
+        }
+    }
+
+    function onEditFocusOut(e) {
+        if (mode !== 'edit') return;
+        var el = e.target;
+        if (!el || !el.classList || !el.classList.contains('__aimax-editable')) return;
+        captureLeafEdit(el);
+    }
+
+    // Force plain-text paste so leaves never gain child elements (which would
+    // break the text-leaf invariant applyHtmlEdits relies on).
+    function onEditPaste(e) {
+        if (!active || mode !== 'edit') return;
+        var el = e.target;
+        if (!el || !el.classList || !el.classList.contains('__aimax-editable')) return;
+        e.preventDefault();
+        var text = '';
+        if (e.clipboardData && e.clipboardData.getData) {
+            text = e.clipboardData.getData('text/plain') || '';
+        }
+        if (!notesActive) text = text.replace(/[\\r\\n]+/g, ' ');
+        try {
+            document.execCommand('insertText', false, text);
+        } catch (err) {
+            // Fallback: append at caret is hard without execCommand; just append.
+            el.textContent = (el.textContent || '') + text;
+        }
+    }
+
+    function isEditingTarget(el) {
+        return el && el.classList && el.classList.contains('__aimax-editable');
+    }
+
+    // While typing in a leaf, the host page's own key handlers (slide decks
+    // navigate on Space / arrows / PageUp-Down, etc.) must NOT fire — otherwise
+    // the deck scrolls away mid-edit. Swallow every keystroke at capture phase
+    // so it never reaches the page's listeners, while still letting the browser
+    // perform the default text-input behavior inside the editable element.
+    function onEditKeyGuard(e) {
+        if (!active || mode !== 'edit') return;
+        if (!isEditingTarget(e.target)) return;
+        // Stop the page (and our own non-edit listeners) from seeing this key.
+        e.stopPropagation();
+        if (e.stopImmediatePropagation) e.stopImmediatePropagation();
+    }
+
+    // In non-notes leaves, Enter would insert <br>/<div> and split the leaf.
+    // Suppress it; newlines are allowed only inside .speaker-notes (notes mode).
+    function onEditKeydown(e) {
+        if (!active || mode !== 'edit') return;
+        var el = e.target;
+        if (!isEditingTarget(el)) return;
+        e.stopPropagation();
+        if (e.stopImmediatePropagation) e.stopImmediatePropagation();
+        if (e.key === 'Enter' && !notesActive) {
+            e.preventDefault();
+        } else if (e.key === 'Escape') {
+            e.preventDefault();
+            el.blur();
+        }
+        // Space, arrows, PageUp/Down, Home/End keep their default text-caret
+        // behavior here but no longer bubble to the deck's navigation handlers.
+    }
+
+    document.addEventListener('focusin', onEditFocusIn, true);
+    document.addEventListener('focusout', onEditFocusOut, true);
+    document.addEventListener('paste', onEditPaste, true);
+    document.addEventListener('keydown', onEditKeydown, true);
+    // Some decks bind on keyup/keypress instead of keydown — guard those too.
+    document.addEventListener('keyup', onEditKeyGuard, true);
+    document.addEventListener('keypress', onEditKeyGuard, true);
 
     function setActive(on, nextMode, nextNotes) {
         active = !!on;
@@ -512,12 +689,21 @@ export const ANNOTATION_CLIENT_JS = `
             document.body.classList.add('__aimax-active');
             if (mode === 'edit') {
                 document.body.classList.add('edit');
+                // Re-scan leaves each time: a notes toggle changes which leaves
+                // are eligible (.speaker-notes only vs all text leaves).
+                hideOverlay();
+                hideInput();
+                pinnedTarget = null;
+                disableInlineEditing();
+                enableInlineEditing();
             } else {
                 document.body.classList.remove('edit');
+                disableInlineEditing();
             }
         } else {
             document.body.classList.remove('__aimax-active');
             document.body.classList.remove('edit');
+            disableInlineEditing();
             hideOverlay();
             hideInput();
             hoverTarget = null;

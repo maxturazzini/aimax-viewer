@@ -127,6 +127,15 @@ Naming convention: `YYYY-MM-DD_descriptive-slug.html` or `.md`
 
 ## Release & Deploy Checklist
 
+> **REGOLA BLOCCANTE — versione in corso = "in volo".**
+> Quando `package.json` punta a una versione **non ancora pubblicata** (es. 0.1.34
+> mentre il Marketplace è a 0.1.33), quella versione è **in lavorazione**.
+> **Non si fa bump alla versione successiva e non si inizia un nuovo ciclo di
+> release finché la versione corrente non è stata pubblicata** completando TUTTA
+> la checklist sotto (build → commit → push → Marketplace → tag → GitHub Release).
+> Si può continuare a committare feature/fix *dentro* la versione in volo; ciò che
+> è vietato è incrementare il numero di versione prima della pubblicazione.
+
 ### 1. Update Version
 ```bash
 # In package.json, update "version": "X.Y.Z"

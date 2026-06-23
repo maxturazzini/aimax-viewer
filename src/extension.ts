@@ -2449,6 +2449,18 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
                     const matches = html.match(/<section\\b/gi);
                     const count = matches ? matches.length : 0;
                     setState(count >= 2 ? 'isDeck' : 'notDeck', count);
+                    // The webview iframe is cross-origin (vscode-webview:// vs
+                    // http://127.0.0.1), so frame.contentDocument.title is
+                    // unreadable and the tab falls back to the full URL. Recover
+                    // the real <title> from the HTML we just fetched and use it
+                    // as the tab label. Guard with the staleness token so a slow
+                    // fetch for an old URL can't relabel a newer page.
+                    if (myToken !== _detectToken) return;
+                    const titleMatch = html.match(/<title[^>]*>([^<]*)<\\/title>/i);
+                    const pageTitle = titleMatch && titleMatch[1].trim();
+                    if (pageTitle) {
+                        vscode.postMessage({ command: 'updateTitle', title: pageTitle });
+                    }
                 })
                 .catch(_ => setState('crossOrigin', 0));
         }
@@ -3132,6 +3144,11 @@ function startHttpServer(workspaceFolder: string) {
                 // strict CSP (e.g. Streamlit). Affects only proxied HTML.
                 delete outHeaders['content-security-policy'];
                 delete outHeaders['content-security-policy-report-only'];
+                // Same reason as static .html: the iframe caches the injected
+                // client, so force a refetch to keep edit/annotation logic fresh.
+                delete outHeaders['etag'];
+                delete outHeaders['last-modified'];
+                outHeaders['cache-control'] = 'no-store, no-cache, must-revalidate';
 
                 // Buffer HTML to inject annotation client + bridge + base href
                 const chunks: Buffer[] = [];
@@ -3430,7 +3447,8 @@ function startHttpServer(workspaceFolder: string) {
                 const html = injectLinkHandler(injectAnnotationClient(wrapMarkdownHtml(parseMarkdown(content), title, metadata)));
                 res.writeHead(200, {
                     'Content-Type': 'text/html; charset=utf-8',
-                    'Access-Control-Allow-Origin': '*'
+                    'Access-Control-Allow-Origin': '*',
+                    'Cache-Control': 'no-store, no-cache, must-revalidate'
                 });
                 res.end(html);
             } catch (err) {
@@ -3449,13 +3467,19 @@ function startHttpServer(workspaceFolder: string) {
             }
 
             const contentType = mimeTypes[ext] || 'application/octet-stream';
-            const headers = {
+            const headers: { [k: string]: string } = {
                 'Content-Type': contentType,
                 'Access-Control-Allow-Origin': '*',
                 'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
                 'Access-Control-Allow-Headers': 'Content-Type'
             };
             if ((ext === '.html' || ext === '.htm') && !isRaw) {
+                // The injected annotation/edit client lives inside the served
+                // HTML. The webview iframe (Chromium) caches responses hard, so
+                // after an extension update the iframe would keep replaying the
+                // OLD client (Browser panel "behaves like before"). Force a
+                // refetch every load so injected logic is always current.
+                headers['Cache-Control'] = 'no-store, no-cache, must-revalidate';
                 const injected = injectLinkHandler(injectAnnotationClient(data.toString('utf-8')));
                 res.writeHead(200, headers);
                 res.end(injected);
