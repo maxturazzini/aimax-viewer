@@ -338,6 +338,14 @@
           ],
           "description": "External domains allowed when CSP mode is 'custom' or 'permissive'"
         },
+        "aimaxViewer.csp.allowedHttpHosts": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "description": "Additional hosts allowed over plain HTTP in the CSP (e.g. 'minimacs.local', '100.107.217.33'). Each entry allows http://<host>:* in default-src/frame-src and the resource directives, so remote HTTP services load in the browser panel iframe. Empty by default."
+        },
         "aimaxViewer.browser.layout": {
           "type": "string",
           "enum": [

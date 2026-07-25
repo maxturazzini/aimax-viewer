@@ -829,6 +829,25 @@ body {
     text-align: right;
 }
 
+/* Lazy-thumbnail placeholder — what a carousel/sorter tile shows before its
+   deck iframe is mounted (and again after the iframe is evicted). Plain text,
+   no iframe, so a 157-slide deck costs nothing to lay out. */
+.thumb-ph {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 4px 6px;
+    font-size: 9px;
+    line-height: 1.25;
+    text-align: center;
+    color: rgba(255,255,255,0.45);
+    background: repeating-linear-gradient(135deg, #0d0d0d 0 6px, #131313 6px 12px);
+    overflow: hidden;
+}
+.sorter-tile .thumb-ph { font-size: 13px; padding: 10px 14px; color: rgba(255,255,255,0.6); }
+
 .hidden { display: none !important; }
 
 /* scrollbar */
@@ -943,6 +962,10 @@ let timerRunning = false;
 let deckBaseUrl = '';
 let channel = null;
 let audienceReady = false;
+// True when the deck declares <meta name="lesson-mode" content="fullpage">, i.e.
+// "don't split me, I own my navigation". Changes how we drive the deck (bridge
+// postMessage instead of scrolling its DOM) — see navFrameToSlide.
+let deckFullpage = false;
 
 function startPresenter() {
     const url = document.getElementById('deckUrl').value.trim();
@@ -966,8 +989,10 @@ function startPresenter() {
                 if (audienceWin.document && audienceWin.document.readyState === 'complete') {
                     clearInterval(checkAudienceLoad);
                     audienceReady = true;
-                    // Sync to current slide once audience is ready
-                    syncAudienceToSlide(currentIndex);
+                    // Only once the deck has been parsed: before that deckFullpage
+                    // is still false and we would pick the wrong section list.
+                    // Otherwise goToSlide() in loader.onload does this sync anyway.
+                    if (slides.length) syncAudienceToSlide(currentIndex);
                     // Return focus to presenter
                     window.focus();
                 }
@@ -986,6 +1011,7 @@ function startPresenter() {
 
     loader.onload = () => {
         const doc = loader.contentDocument;
+        deckFullpage = detectFullpage(doc);   // must precede parseSlides: it picks the selector
         slides = parseSlides(doc);
         document.body.removeChild(loader);
         buildCarousel();
@@ -1020,14 +1046,41 @@ let carouselItemHeight = 60;
 // Build the full slide model (ALL sections, including hidden) from a deck
 // document. Array index === DOM section index. Hidden slides carry hidden:true
 // so navigation can skip them while explicit clicks still show them.
+// A deck opts out of being sliced with <meta name="lesson-mode" content="fullpage">.
+function detectFullpage(doc) {
+    try {
+        const m = doc.querySelector('meta[name="lesson-mode"]');
+        return !!m && /\bfullpage\b/i.test(m.getAttribute('content') || '');
+    } catch (e) { return false; }
+}
+
+// The sections that make up the deck. A fullpage deck is driven through the
+// aimax-lesson-goto bridge, and the bridge numbers its slides with the reference
+// selector ('main section' when there is one, plain 'section' otherwise) — match
+// it, or slide N here would not be the slide the deck jumps to.
+function deckSections(doc) {
+    if (deckFullpage) {
+        const scoped = doc.querySelectorAll('main section');
+        if (scoped.length) return scoped;
+    }
+    return doc.querySelectorAll('section');
+}
+
 function parseSlides(doc) {
     const out = [];
-    doc.querySelectorAll('section').forEach((s, i) => {
+    // Position among ALL sections, which is the order the raw-source tools
+    // (splitSectionsRaw → agenticSaveNotes, sorter) index by. In fullpage mode
+    // deckSections() may return only the ones inside <main>, so presenter index
+    // and source index stop being the same number — anything that edits the file
+    // must go through sourceIndex, never through the array position.
+    const allSections = Array.prototype.slice.call(doc.querySelectorAll('section'));
+    deckSections(doc).forEach((s, i) => {
         const h = s.querySelector('h1, h2');
         const notesEl = s.querySelector('.speaker-notes');
         out.push({
             index: i,
             domIndex: i,
+            sourceIndex: allSections.indexOf(s),
             title: h ? h.textContent : `Slide ${i + 1}`,
             notes: notesEl ? notesEl.textContent : '',
             className: s.className,
@@ -1061,9 +1114,175 @@ function visibleCount() {
     return slides.filter(s => !s.hidden).length;
 }
 
+// === LAZY THUMBNAILS ===
+// Every thumbnail is a full load of the entire deck, so one per slide does not
+// scale: a 157-slide deck used to instantiate 157 carousel iframes at once (plus
+// current + next = 159) and froze the presenter for seconds.
+//
+// What actually froze the page was starting them all in the same frame, not the
+// number alive afterwards. So tiles start as a cheap text placeholder and are
+// mounted through a QUEUE: at most THUMB_LOADING start at a time, nearest to the
+// centre of the screen first, and the next starts as one finishes. Tiles that are
+// off screen are evicted down to THUMB_BUDGET; tiles the user is actually looking
+// at are kept, up to a hard ceiling of THUMB_CEILING.
+const THUMB_BUDGET = 24;      // target once tiles are off screen
+const THUMB_CEILING = 64;     // absolute cap, even for on-screen tiles
+const THUMB_LOADING = 4;      // how many may be loading at the same time
+const thumbInfo = new WeakMap();   // tile -> { build }
+let thumbLru = [];                 // mounted tiles
+let thumbQueue = [];               // tiles waiting for a slot
+let thumbLoading = 0;
+const thumbPending = new WeakSet();   // iframes still loading, i.e. holding a slot
+
+// How far a tile's centre is from the centre of the screen. Ranks what to mount
+// first and what to drop — note this uses the tile's REAL rect, not the
+// observer's verdict, which rootMargin inflates well past what is on screen.
+function thumbDistance(tile) {
+    const r = tile.getBoundingClientRect();
+    return Math.hypot(r.left + r.width / 2 - innerWidth / 2, r.top + r.height / 2 - innerHeight / 2);
+}
+
+function thumbOnScreen(tile) {
+    const r = tile.getBoundingClientRect();
+    return r.width > 0 && r.height > 0 && r.bottom > 0 && r.top < innerHeight && r.right > 0 && r.left < innerWidth;
+}
+
+function makeThumbObserver(root) {
+    return new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+            if (entry.isIntersecting) {
+                if (thumbQueue.indexOf(entry.target) < 0) thumbQueue.push(entry.target);
+            } else {
+                const at = thumbQueue.indexOf(entry.target);
+                if (at >= 0) thumbQueue.splice(at, 1);   // scrolled away before its turn
+            }
+        });
+        drainThumbQueue();
+    }, { root: root, rootMargin: '250px' });
+}
+
+// Start as many queued thumbnails as the concurrency and ceiling allow, nearest
+// first. Queueing (rather than dropping the overflow, as a batch cap would) is
+// what stops a tile that is plainly on screen from staying blank forever: an
+// IntersectionObserver reports changes, and in a grid that does not scroll there
+// is no second event ever coming.
+function drainThumbQueue() {
+    thumbQueue = thumbQueue.filter(t => t.isConnected && !t.querySelector('iframe'));
+    if (!thumbQueue.length) return;
+    thumbQueue.sort((a, b) => thumbDistance(a) - thumbDistance(b));
+    while (thumbLoading < THUMB_LOADING && thumbQueue.length && thumbLru.length < THUMB_CEILING) {
+        mountThumb(thumbQueue.shift());
+    }
+}
+
+function makePlaceholder(text) {
+    const ph = document.createElement('div');
+    ph.className = 'thumb-ph';
+    ph.textContent = text || '';
+    return ph;
+}
+
+// `build(tile)` returns a ready-to-insert iframe; it runs again if the tile was
+// evicted and later scrolls back into view.
+function registerThumb(tile, observer, build) {
+    thumbInfo.set(tile, { build: build });
+    observer.observe(tile);
+}
+
+function mountThumb(tile) {
+    const info = thumbInfo.get(tile);
+    if (!info) return;
+    if (!tile.querySelector('iframe')) {
+        const iframe = info.build(tile);
+        if (!iframe) return;
+        const ph = tile.querySelector('.thumb-ph');
+        thumbPending.add(iframe);
+        thumbLoading++;
+        const done = () => {
+            releaseThumbSlot(iframe);
+            if (ph) ph.style.display = 'none';   // placeholder stays under it until painted
+            drainThumbQueue();                   // a slot just freed up
+        };
+        iframe.addEventListener('load', done);
+        iframe.addEventListener('error', done);
+        tile.insertBefore(iframe, ph ? ph.nextSibling : tile.firstChild);
+    }
+    touchThumb(tile);
+}
+
+// Give back the concurrency slot an iframe was holding, once.
+function releaseThumbSlot(iframe) {
+    if (!iframe || !thumbPending.has(iframe)) return;
+    thumbPending.delete(iframe);
+    thumbLoading = Math.max(0, thumbLoading - 1);
+}
+
+function unmountThumb(tile) {
+    const iframe = tile.querySelector('iframe');
+    if (iframe) {
+        // Evicting an iframe that is still loading means its load event will never
+        // fire. Without this the slot is leaked, and once four leak the queue stops
+        // draining for good: no thumbnail ever mounts again.
+        releaseThumbSlot(iframe);
+        iframe.remove();
+    }
+    const ph = tile.querySelector('.thumb-ph');
+    if (ph) ph.style.display = '';
+}
+
+// Trim the live set. Tiles that are off screen go first, down to THUMB_BUDGET;
+// a tile the user is actually looking at is only dropped if even the on-screen
+// ones exceed THUMB_CEILING. "Is it intersecting?" cannot be the criterion —
+// rootMargin counts far more tiles than actually fit, so on a zoomed-out sorter
+// every tile would claim to be visible and nothing would ever be evicted.
+function touchThumb(tile) {
+    const at = thumbLru.indexOf(tile);
+    if (at >= 0) thumbLru.splice(at, 1);
+    thumbLru.push(tile);
+    thumbLru = thumbLru.filter(t => t.isConnected);   // drop tiles rebuilt away
+
+    const evict = (limit, sparingOnScreen) => {
+        if (thumbLru.length <= limit) return;
+        const farthestFirst = thumbLru.slice().sort((a, b) => thumbDistance(b) - thumbDistance(a));
+        for (let i = 0; i < farthestFirst.length && thumbLru.length > limit; i++) {
+            const victim = farthestFirst[i];
+            if (victim === tile) continue;                          // never what we just mounted
+            if (sparingOnScreen && thumbOnScreen(victim)) continue; // nor what is being looked at
+            unmountThumb(victim);
+            thumbLru.splice(thumbLru.indexOf(victim), 1);
+        }
+    };
+    evict(THUMB_BUDGET, true);
+    evict(THUMB_CEILING, false);
+}
+
+// An IntersectionObserver only reports on change, so tiles evicted while
+// something else was using up the budget stay blank until the next scroll.
+// Re-observing redelivers an entry for each and lets them mount again.
+function refreshThumbs(observer, root) {
+    if (!observer || !root) return;
+    root.childNodes.forEach(tile => {
+        if (thumbInfo.has(tile)) { observer.unobserve(tile); observer.observe(tile); }
+    });
+}
+
+function unmountThumbsIn(root) {
+    thumbLru = thumbLru.filter(tile => {
+        if (!root.contains(tile)) return true;
+        unmountThumb(tile);
+        return false;
+    });
+}
+
+let carouselObserver = null;
+
 function buildCarousel() {
     const carousel = document.getElementById('carousel');
+    if (carouselObserver) carouselObserver.disconnect();
     carousel.textContent = '';
+    thumbLru = thumbLru.filter(t => t.isConnected);
+    carouselObserver = makeThumbObserver(carousel);
+
     slides.forEach((s, i) => {
         const item = document.createElement('div');
         item.className = 'carousel-item' + (s.hidden ? ' carousel-hidden' : '');
@@ -1072,22 +1291,12 @@ function buildCarousel() {
         item.title = s.hidden ? 'Hidden slide — click to show it anyway' : '';
         item.onclick = () => goToSlide(i);
 
-        const iframe = document.createElement('iframe');
-        iframe.src = deckBaseUrl;
-        iframe.onload = () => {
-            scrollIframeToSlide(iframe, i, true);
-            try {
-                const iframeDoc = iframe.contentDocument;
-                iframeDoc.documentElement.style.overflow = 'hidden';
-            } catch(e) {}
-        };
-        iframe.style.transform = 'scale(' + (carouselItemWidth / 1280) + ')';
+        item.appendChild(makePlaceholder(s.title));
 
         const num = document.createElement('div');
         num.className = 'carousel-num';
         num.textContent = s.hidden ? '∅' : visiblePosition(i);
 
-        item.appendChild(iframe);
         item.appendChild(num);
         if (s.hidden) {
             const badge = document.createElement('div');
@@ -1097,6 +1306,17 @@ function buildCarousel() {
             item.appendChild(badge);
         }
         carousel.appendChild(item);
+
+        registerThumb(item, carouselObserver, () => {
+            const iframe = document.createElement('iframe');
+            iframe.src = deckBaseUrl;
+            iframe.style.transform = 'scale(' + (carouselItemWidth / 1280) + ')';
+            iframe.onload = () => {
+                navFrameToSlide(iframe, i, true);
+                try { iframe.contentDocument.documentElement.style.overflow = 'hidden'; } catch(e) {}
+            };
+            return iframe;
+        });
     });
 }
 
@@ -1182,11 +1402,20 @@ function syncAudienceToSlide(domIndex, reveal) {
                 st.textContent = 'section[data-hidden]{display:none !important;}';
                 adoc.head.appendChild(st);
             }
-            const sections = adoc.querySelectorAll('section');
+            // Best effort for fullpage decks with their own navigation. The
+            // reference bridge no-ops outside an iframe, so the audience window
+            // usually ignores this and the scroll below is what actually moves it.
+            if (deckFullpage) {
+                try { audienceWin.postMessage({ type: 'aimax-lesson-goto', slide: domIndex + 1 }, '*'); } catch(e) {}
+            }
+            const sections = deckSections(adoc);
             const target = sections[domIndex];
             if (target) {
                 // Explicitly viewing a hidden slide: reveal it for the audience too
-                if (reveal && target.hasAttribute('data-hidden')) target.style.display = 'flex';
+                // !important, because the hide rule injected above is !important
+                // too and a plain inline style loses to it — the slide would stay
+                // invisible and the view would never move off the previous one.
+                if (reveal && target.hasAttribute('data-hidden')) target.style.setProperty('display', 'flex', 'important');
                 // Disable snap for instant jump, then re-enable
                 adoc.documentElement.style.scrollBehavior = 'auto';
                 adoc.documentElement.style.scrollSnapType = 'none';
@@ -1215,6 +1444,7 @@ function goToSlide(index) {
 
 function updatePresenterView() {
     const slide = slides[currentIndex];
+    if (!slide) return;   // deck with no sections, or an out-of-range index from the audience
     // "Next" preview shows the next VISIBLE slide
     const nextIdx = nextVisibleIndex(currentIndex);
     const nextSlideData = nextIdx >= 0 ? slides[nextIdx] : null;
@@ -1236,9 +1466,9 @@ function updatePresenterView() {
     const currentFrame = document.getElementById('currentFrame');
     if (!currentFrame.src || !currentFrame.src.includes(deckBaseUrl.split('?')[0])) {
         currentFrame.src = deckBaseUrl;
-        currentFrame.onload = () => { scrollIframeToSlide(currentFrame, currentIndex, slide.hidden); fitIframe(currentFrame); };
+        currentFrame.onload = () => { navFrameToSlide(currentFrame, currentIndex, slide.hidden); fitIframe(currentFrame); };
     } else {
-        scrollIframeToSlide(currentFrame, currentIndex, slide.hidden);
+        navFrameToSlide(currentFrame, currentIndex, slide.hidden);
     }
 
     // Next slide iframe
@@ -1246,9 +1476,9 @@ function updatePresenterView() {
     if (nextSlideData) {
         if (!nextFrame.src || !nextFrame.src.includes(deckBaseUrl.split('?')[0])) {
             nextFrame.src = deckBaseUrl;
-            nextFrame.onload = () => { scrollIframeToSlide(nextFrame, nextIdx); fitIframe(nextFrame); };
+            nextFrame.onload = () => { navFrameToSlide(nextFrame, nextIdx); fitIframe(nextFrame); };
         } else {
-            scrollIframeToSlide(nextFrame, nextIdx);
+            navFrameToSlide(nextFrame, nextIdx);
         }
     }
 
@@ -1281,6 +1511,50 @@ function hideHiddenSections(iframe) {
 // Scroll a deck iframe to section `index`. `revealTarget` forces that one
 // section visible even if it carries data-hidden (so carousel thumbnails and
 // explicit clicks on hidden slides still render the slide itself).
+// Point a deck iframe at slide `index`.
+//
+// Legacy decks are scroll-driven, so we reach into their DOM and scroll. A deck
+// carrying <meta name="lesson-mode" content="fullpage"> declares that it owns its
+// own navigation — it may not scroll at all — so we drive it through the
+// aimax-lesson-goto bridge instead (1-based slide number, per the contract).
+function navFrameToSlide(iframe, index, revealTarget) {
+    if (!deckFullpage) {
+        scrollIframeToSlide(iframe, index, revealTarget);
+        return;
+    }
+    hideHiddenSections(iframe);
+    let doc = null, target = null;
+    try {
+        doc = iframe.contentDocument;
+        target = deckSections(doc)[index];
+    } catch (e) {}
+    // !important: hideHiddenSections' rule is !important, a plain inline style loses
+    if (target && revealTarget && target.hasAttribute('data-hidden')) target.style.setProperty('display', 'flex', 'important');
+
+    try {
+        iframe.contentWindow.postMessage({ type: 'aimax-lesson-goto', slide: index + 1 }, '*');
+    } catch (e) {}
+
+    // Then land the scroll ourselves, instantly. The bridge scrolls with
+    // behavior:'smooth', which on a snapping deck animates through every slide in
+    // between (ugly in a 106px thumbnail) and can settle one section off. Doing it
+    // first and instantly means the bridge's own scroll finds itself already there.
+    // On a deck that navigates by script rather than scrolling this is a no-op and
+    // the goto above is what moves it — and it keeps a deck that declares the meta
+    // but ships no bridge navigating instead of silently freezing on slide 1.
+    if (target) {
+        try {
+            doc.documentElement.style.scrollBehavior = 'auto';
+            doc.documentElement.style.scrollSnapType = 'none';
+            target.scrollIntoView();
+            setTimeout(() => {
+                doc.documentElement.style.scrollBehavior = 'smooth';
+                doc.documentElement.style.scrollSnapType = 'y mandatory';
+            }, 50);
+        } catch (e) {}
+    }
+}
+
 function scrollIframeToSlide(iframe, index, revealTarget) {
     try {
         hideHiddenSections(iframe);
@@ -1290,7 +1564,8 @@ function scrollIframeToSlide(iframe, index, revealTarget) {
         if (!target) return;
         let restore = false;
         if (revealTarget && target.hasAttribute('data-hidden')) {
-            target.style.display = 'flex';  // override the hide rule for this one
+            // !important, or the hide rule (also !important) wins and this stays hidden
+            target.style.setProperty('display', 'flex', 'important');
             restore = true;
         }
         // Disable smooth scroll for instant jump in preview
@@ -1528,6 +1803,19 @@ function httpUrlToWorkspaceRel(url) {
     } catch { return null; }
 }
 
+// The deck EXACTLY as it sits on disk. Fetching the plain URL would return the
+// served copy, whose injected AIMax client we would then write back into the
+// source on save — every save baking in one more copy, and the oldest one
+// winning at load time because the client self-disables when it finds one
+// already loaded. Anything that reads the source in order to write it back
+// must go through here.
+async function fetchDeckSource() {
+    const sep = deckBaseUrl.indexOf('?') >= 0 ? '&' : '?';
+    const r = await fetch(deckBaseUrl + sep + 'aimax-raw=1', { cache: 'no-store' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return r.text();
+}
+
 function splitSectionsRaw(raw) {
     const re = /<section\b[^>]*>[\s\S]*?<\/section>/gi;
     return raw.match(re) || [];
@@ -1576,10 +1864,7 @@ async function openSorter() {
 
     let raw;
     try {
-        raw = await fetch(deckBaseUrl, { cache: 'no-store' }).then(r => {
-            if (!r.ok) throw new Error('HTTP ' + r.status);
-            return r.text();
-        });
+        raw = await fetchDeckSource();
     } catch (e) {
         status.className = 'sorter-status error';
         status.textContent = 'Load failed: ' + e.message;
@@ -1590,6 +1875,17 @@ async function openSorter() {
     if (!sections.length) {
         status.className = 'sorter-status error';
         status.textContent = 'No <section> slides found.';
+        return;
+    }
+    // The sorter models the RAW source; the presenter may be showing a subset of
+    // it (fullpage decks are scoped to <main>). When the two disagree, reordering
+    // here would renumber and shuffle sections the presenter never shows — and
+    // saving rebuilds the file from head + sections + tail, dropping whatever
+    // markup sits between them (a <main> wrapper, for one). Refuse instead.
+    if (slides.length && sections.length !== slides.length) {
+        status.className = 'sorter-status error';
+        status.textContent = `Source has ${sections.length} <section> but the deck presents ${slides.length} slides `
+            + '(sections outside <main>). Reordering would move slides that are not shown — sorter disabled for this deck.';
         return;
     }
     // Capture head/tail so we can reassemble the file byte-for-byte around slides
@@ -1603,38 +1899,42 @@ async function openSorter() {
     // iframe on each change — slow, and they flickered back to slide 1).
     sorterItems = sections.map((html, i) => ({ html, hidden: sectionIsHidden(html), origIndex: i, tile: null }));
     status.textContent = '';
+    // The overlay covers the carousel completely, so its thumbnails are now
+    // invisible iframes holding slots the sorter's own tiles need. closeSorter()
+    // brings them back.
+    unmountThumbsIn(document.getElementById('carousel'));
     buildSorterTiles();
     layoutSorter();
 }
 
-// Create one tile (with a single iframe scrolled to its slide) per item, ONCE.
+// Plain text of a raw section's first heading, for the tile placeholder.
+// DOMParser (not innerHTML) so nothing in the deck source is executed or fetched.
+function sectionTitleRaw(html, i) {
+    const m = html.match(/<h[1-4]\b[^>]*>([\s\S]*?)<\/h[1-4]>/i);
+    if (!m) return 'Slide ' + (i + 1);
+    let text = '';
+    try { text = new DOMParser().parseFromString(m[1], 'text/html').body.textContent.trim(); }
+    catch (e) { text = m[1].replace(/<[^>]*>/g, '').trim(); }
+    return text || ('Slide ' + (i + 1));
+}
+
+let sorterObserver = null;
+
+// Create one tile per item, ONCE. Thumbnails mount lazily (see registerThumb).
 function buildSorterTiles() {
     const grid = document.getElementById('sorterGrid');
+    if (sorterObserver) sorterObserver.disconnect();
     grid.textContent = '';
+    thumbLru = thumbLru.filter(t => t.isConnected);
+    sorterObserver = makeThumbObserver(grid);
+
     sorterItems.forEach((it) => {
         const tile = document.createElement('div');
         tile.className = 'sorter-tile';
         tile.draggable = true;
 
-        const iframe = document.createElement('iframe');
-        iframe.src = deckBaseUrl;
         const secIdx = it.origIndex;  // section index in the (unmodified) source
-        iframe.onload = () => {
-            try {
-                const doc = iframe.contentDocument;
-                doc.documentElement.style.overflow = 'hidden';
-                // Reveal hidden sections so even a hidden slide renders its own content
-                const st = doc.createElement('style');
-                st.textContent = 'section[data-hidden]{display:flex !important;}';
-                doc.head.appendChild(st);
-                const secs = doc.querySelectorAll('section');
-                if (secs[secIdx]) {
-                    doc.documentElement.style.scrollBehavior = 'auto';
-                    doc.documentElement.style.scrollSnapType = 'none';
-                    secs[secIdx].scrollIntoView();
-                }
-            } catch(e) {}
-        };
+        tile.appendChild(makePlaceholder(sectionTitleRaw(it.html, secIdx)));
 
         const num = document.createElement('div');
         num.className = 'tile-num';
@@ -1653,7 +1953,6 @@ function buildSorterTiles() {
         badge.className = 'tile-hidden-badge';
         badge.textContent = 'Hidden';
 
-        tile.appendChild(iframe);
         tile.appendChild(num);
         tile.appendChild(eye);
         tile.appendChild(badge);
@@ -1692,17 +1991,54 @@ function buildSorterTiles() {
 
         it.tile = tile;
         grid.appendChild(tile);
+
+        registerThumb(tile, sorterObserver, () => {
+            const iframe = document.createElement('iframe');
+            iframe.src = deckBaseUrl;
+            iframe.style.transform = 'scale(' + (sorterTileWidth / 1280) + ')';
+            iframe.onload = () => {
+                try {
+                    const doc = iframe.contentDocument;
+                    doc.documentElement.style.overflow = 'hidden';
+                    // Reveal hidden sections so even a hidden slide renders its own content
+                    const st = doc.createElement('style');
+                    st.textContent = 'section[data-hidden]{display:flex !important;}';
+                    doc.head.appendChild(st);
+                    const secs = doc.querySelectorAll('section');
+                    if (secs[secIdx]) {
+                        doc.documentElement.style.scrollBehavior = 'auto';
+                        doc.documentElement.style.scrollSnapType = 'none';
+                        secs[secIdx].scrollIntoView();
+                    }
+                } catch(e) {}
+                // openSorter refuses to open unless the raw sections and the
+                // presented slides line up 1:1, so secIdx is also the bridge's
+                // slide number: a fullpage deck that navigates by script instead
+                // of scrolling lands on the right slide too, rather than showing
+                // slide 1 in every tile.
+                if (deckFullpage) {
+                    try { iframe.contentWindow.postMessage({ type: 'aimax-lesson-goto', slide: secIdx + 1 }, '*'); } catch(e) {}
+                }
+            };
+            return iframe;
+        });
     });
 }
 
-// Cheap update: reorder existing tiles, refresh numbers / hidden state / zoom.
-// Never recreates iframes.
+// Reorder existing tiles, refresh numbers / hidden state / zoom.
+//
+// Moving an iframe in the DOM RELOADS it — even within the same parent, since
+// insertBefore/appendChild is a remove plus an insert. The old code appended
+// every tile on every call, so one nudge of the zoom slider reloaded every
+// mounted thumbnail. Only tiles that are genuinely out of position are moved now,
+// which means a zoom change (no reordering) reloads nothing and a drag reloads
+// only the tiles that actually shifted.
 function layoutSorter() {
     const grid = document.getElementById('sorterGrid');
     const w = sorterTileWidth;
     const h = Math.round(w * 720 / 1280);
     let visibleNum = 0;
-    sorterItems.forEach((it) => {
+    sorterItems.forEach((it, idx) => {
         if (!it.hidden) visibleNum++;
         const tile = it.tile;
         tile.style.width = w + 'px';
@@ -1714,9 +2050,13 @@ function layoutSorter() {
         const eye = tile.querySelector('.tile-eye');
         eye.title = it.hidden ? 'Show this slide' : 'Hide this slide';
         eye.textContent = it.hidden ? '🚫' : '👁';
-        // Move the node into its new order position (no-op if already there)
-        grid.appendChild(tile);
+        // Everything before idx is already in place, so if the node sitting here
+        // is not ours, inserting ours before it puts it at idx. Skipping the
+        // no-ops is the whole point: each move costs an iframe reload.
+        const occupant = grid.children[idx];
+        if (occupant !== tile) grid.insertBefore(tile, occupant || null);
     });
+    drainThumbQueue();
 }
 
 function setSorterZoom(v) {
@@ -1726,6 +2066,10 @@ function setSorterZoom(v) {
 
 function closeSorter() {
     document.getElementById('sorterOverlay').classList.remove('open');
+    // A closed sorter must not keep deck iframes alive behind the presenter
+    unmountThumbsIn(document.getElementById('sorterGrid'));
+    // ...and the carousel tiles it evicted along the way should come back
+    refreshThumbs(carouselObserver, document.getElementById('carousel'));
 }
 
 async function saveSorter() {
@@ -1785,6 +2129,7 @@ function reloadDeck() {
     document.body.appendChild(loader);
     loader.onload = () => {
         const doc = loader.contentDocument;
+        deckFullpage = detectFullpage(doc);
         slides = parseSlides(doc);
         document.body.removeChild(loader);
         // Force the preview iframes to reload fresh source
@@ -1874,23 +2219,24 @@ async function agenticSaveNotes() {
 
     let raw;
     try {
-        raw = await fetch(deckBaseUrl, { cache: 'no-store' }).then(r => {
-            if (!r.ok) throw new Error('HTTP ' + r.status);
-            return r.text();
-        });
+        raw = await fetchDeckSource();
     } catch (e) {
         updateBanner(banner, 'error', `Could not refetch deck: ${e.message}`);
         return;
     }
 
     const sections = splitSectionsRaw(raw);
-    if (idx >= sections.length) {
+    // splitSectionsRaw indexes every <section> in the file, which is NOT the
+    // presenter's own index once deckSections() narrows to <main> — writing at
+    // `idx` would overwrite a different slide's notes, silently and successfully.
+    const srcIdx = slides[idx] && slides[idx].sourceIndex >= 0 ? slides[idx].sourceIndex : idx;
+    if (srcIdx >= sections.length) {
         updateBanner(banner, 'error', `Source has only ${sections.length} sections.`);
         return;
     }
 
     const noteRe = /(<div\b[^>]*\bclass="[^"]*\bspeaker-notes\b[^"]*"[^>]*>)([\s\S]*?)(<\/div>)/i;
-    const match = sections[idx].match(noteRe);
+    const match = sections[srcIdx].match(noteRe);
     if (!match) {
         updateBanner(banner, 'error', 'No <div class="speaker-notes"> in this section. Add one to the source first.');
         return;

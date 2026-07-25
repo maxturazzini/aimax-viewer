@@ -2,6 +2,153 @@
 
 All notable changes to the AIMax Viewer extension will be documented in this file.
 
+## [0.1.34] - 2026-07-25
+
+### Added
+
+- **Edit ▸ Move/Resize (direct manipulation of frames)**: Edit mode gains a new ✥ toggle next to 📝 Notes. Turn it on and the cursor stops being a text caret and becomes `move`: drag a block to move it, drag the 8 orange handles of the selection frame to resize it, ↑↓←→ to nudge by 1px (⇧ = 10px), `Esc` to deselect. The Notes and Move/Resize sub-modes are mutually exclusive.
+  - **The markup is never touched.** Every gesture becomes a CSS rule in a single `<style data-aimax-layout>` block at the end of `<body>`, keyed on a selector the client verified resolves to exactly one element (`#id` when there is one, otherwise a `>` chain with `:nth-of-type`, truncated at the first ancestor carrying a unique id). The block is idempotent: re-saving the same element overwrites its declarations instead of appending new ones, and it can be deleted by hand in one go. Only geometry properties are writable (`transform`, `width`, `height`, `box-sizing`, min/max) — selectors and values are sanitized, so no arbitrary text reaches the file.
+  - **Respects the page's own transforms**: on a deck that scales its stage (`transform: scale(...)`), 1 mouse px ≠ 1 CSS px. Moves convert with the *parent's* scale, resizes with the element's *total* scale, so the frame tracks the pointer and the saved geometry reproduces to the pixel what you saw while dragging. Dragging an N/W handle keeps the opposite edge still. Any rotate/scale the element already carried is preserved (only the translation component of the matrix is rewritten).
+  - One ✥ badge per frame: it adds to the **Save** button's counter alongside text edits (a single save writes both), and clicking it undoes the gesture, putting the element back as it was. Available in both the Browser Panel and the Home Panel; the one-per-session `.bak` applies here too.
+  - In this mode clicks on the page are swallowed: dragging a card that is also a link, or a deck's click-to-advance surface, no longer navigates away mid-gesture.
+  - **Stacking order (z-order)** on the artifact's own elements, with the four classic commands: **⤓ To back**, **↓ Backward**, **↑ Forward**, **⤒ To front**. Steps are computed from the current `z-index` values of the elements the frame **actually overlaps**, wherever they sit in the tree: "to front" goes to max+1, "to back" to min−1, single steps hop over the contender immediately above/below and say so when you are already at the end. On a `position: static` element `z-index` would be inert, so `position: relative` is written alongside it (which leaves it exactly where normal flow put it). Both properties are whitelisted with dedicated validation: `position` accepts only the five CSS keywords, `z-index` only an integer or `auto`.
+    - **The comparison is no longer between siblings.** Looking for overlaps among `parentElement.children` feels natural but is the wrong set: the point of dragging a frame is to put it where it wasn't, so what it ends up covering is almost always a *cousin* — the card in the next column, a box in another wrapper. With the sibling search the command answered *"Nothing overlaps this frame"* on the very overlap the user was looking at, and when it did fire it picked numbers taken from siblings, too low to beat the real cousin.
+    - **Stacking contexts.** A `z-index` does not cross an ancestor that establishes a stacking context (`transform`, `filter`, `opacity < 1`, `isolation`, `mix-blend-mode`, `will-change`, `contain`, `position: fixed/sticky`, or a `z-index` on a positioned box): inside that ancestor the element is sealed, and no value — not even `999` — lifts it above anything outside. This is the typical case of decks that scale their stage. The command now recognises it: it ranks against everything it can genuinely reach and, if something stays out of reach, it says so, naming both the box that stays on top and the ancestor responsible and why ("`<div.seg-zone.seg-interno>` creates a stacking context (transform)… restack that block instead"), instead of declaring success while leaving the frame buried.
+  - A pure restack no longer writes an identity `transform` into the file: `transform` appears only if the element was really moved or resized.
+  - **Undo/redo of gestures**, with a button row that appears in the panel body only inside Move/Resize (and disappears when you go back to text editing): **↶ Undo** (`⌘Z`), **↷ Redo** (`⇧⌘Z`), **⟲ Reset frame**, which puts the selected frame back to how it was before the first gesture. The buttons disable when there is nothing to undo/redo, or no selection. Consecutive arrow presses coalesce into a single history entry, so holding a key down doesn't bury the history under one entry per pixel. When an undo brings an element back to its starting geometry, its pending entry and badge disappear instead of writing a rule identical to the original.
+  - **Ordered z-index band**: the injected client's overlays (frame, label, popup, badges) now sit below `2147483647`, reserved for AIMax's own chrome. It was needed in the Home Panel, where chrome and client live in the same document: both being at the maximum, the client won on DOM order and the inspector's white label ended up above the panel.
+
+### Added (Move/Resize, second pass)
+
+- **Rotation**: a round handle on a stem above the frame; drag it and the frame turns about its centre; **⇧ snaps to 15°**. The rotation composes with the transform the element already had (`L = R · M0`), so any scale or skew belonging to the artifact survives and only our rotation is layered on top. The resize handles stay on the **element's** axes: on a tilted frame the mouse delta is mapped into local space, otherwise dragging the right edge of a skewed box widened it diagonally.
+- **⇧ while resizing keeps the aspect ratio** (on corners), driven by the axis you pulled furthest.
+- **Delete a frame**, from the 🗑 button or the `Del`/`Backspace` key. It is `display: none`, not a cut: **the markup stays in the file**, so ⌘Z brings it back and "Back to original" removes the rule entirely. `display` joins the whitelist with its own list of accepted values.
+- **Show Dev Console** in the hamburger: opens the **panel's** Developer Tools (`workbench.action.webview.openDeveloperTools`), which is where the viewer's own errors land.
+- **Alignment snapping** while dragging a frame: edges and centre are compared against those of the siblings **and of the parent**; within 6px the snap is exact and a guide appears showing the alignment found. The guide is visible *only* while a snap is active, so seeing it is confirmation of being aligned rather than a hope. **⌥ suspends snapping** on the fly. Targets are measured once at drag start: they cannot move with the pointer down, and re-measuring them on every move would thrash layout.
+- **Two restore commands in the hamburger**, both with a modal confirmation before writing, described to the user by what **survives** rather than by how they work:
+  - **Restore original layout** — puts every element back where the page puts it (undoes moves, resizes, rotations, ordering and hidden frames); **text edits stay**. It is not a convenience: it is the only way out of a state the interface can enter and not leave, because a frame hidden with Delete no longer has a box to click, and after a reload there is nothing to select in order to undo it.
+  - **Restore file from backup** — takes the whole file back to how it was before the session's first edit, text included. The `.bak` already existed on disk at every save, but was unreachable from the interface.
+
+### Design notes — why geometry never touches the markup (and what that costs)
+
+> For whoever reads this code later. The mechanism is deliberate, but it carries a
+> measured price, not a theoretical one: anyone extending it needs to know both.
+
+- **Why a CSS block and not the element's tag.** The whole save path rests on a
+  **verbatim** replace: `applyHtmlEdits` finds the old string byte for byte in the
+  source and swaps it. Text edits suit that — the text inside an element survives
+  untouched. An **opening tag** does not: run it through the DOM and re-serialize
+  it and the attribute order, the quote style, the entity encoding and the
+  whitespace inside the tag all change. The anchor would no longer be found, or
+  would be found wrong. So moving and resizing — which would mean rewriting that
+  tag — take the other route: a selector-addressed rule in
+  `<style data-aimax-layout>`. **Text edits stay in the markup**: only geometry
+  ends up in the CSS block.
+- **What it buys.** The block is idempotent (one rule per element, not per
+  gesture: twenty drags on the same box stay one line), it lives in one place
+  instead of being scattered across N tags, and it is **fully reversible**: remove
+  the last rule and the file goes back *byte-identical* to the original — that is
+  a test, not a hope. Plus the one-per-session `.bak`.
+- **What it costs, measured.** The selector is **positional** (`:nth-of-type`) and
+  **nothing verifies that it still points where it pointed**. `laySavedRuleIndex`
+  compares only the selector *text*, not the element. Two ways to break, both
+  reproduced on a real artifact:
+  1. **The rule evaporates.** Saved a box's move; inserted a card earlier in the
+     file; the selector resolves to `0` elements. The box returns to its original
+     position and the saved layout is gone — **with no error anywhere**.
+  2. **Worse: it moves the wrong box.** Rule saved on one block; an element added
+     before it in the same container; the same rule now moves the *next* block,
+     and the original one goes back to `transform: none`. Silently. Whoever opens
+     the file sees an element out of place and hunts for the bug in the artifact's
+     own CSS, where it isn't.
+- **The trigger lives inside this same product.** The **Slide Sorter reorders
+  sections by rewriting the whole file**: every reorder invalidates the rules
+  whose path crosses that level. The same goes for a hand edit of the HTML, or an
+  agent adding a card. And because the rules are `!important`, a misalignment also
+  beats CSS the author writes afterwards by hand.
+- **It is not "the file gets messy"**: the block stays small and deletable. It is
+  that the file becomes **silently misaligned**.
+- **The two ways out, for whoever comes back to this.** (a) *Validate on load*:
+  the client already reads the saved block, so it can check that each selector
+  still resolves to exactly one element and flag the ones at 0 or >1 — cheap, and
+  it turns a silent failure into a warning, but it does not cover the "resolves to
+  exactly one, the wrong one" case. (b) *Anchor to an `id`*: `buildLayoutSelector`
+  already prefers `#id` when there is one, and that is immune to reordering;
+  making it robust would mean **writing** an id into the element on save, i.e.
+  touching the opening tag — but as the insertion of a single attribute into a tag
+  already identified, not as a re-serialization of the DOM, which is the thing
+  this design avoids.
+
+### Added (Annotate)
+
+- **Freehand drawing (pen) as an annotation gesture**: Annotate mode now has a third way, next to 👆 Point — it did not exist before. Drawing over the page leaves a visible SVG stroke until you write the comment attached to it (a tap without dragging, fewer than 2 points, is discarded). The stroke is reduced to ~40 points at most and saved in normalized coordinates (0–1) relative to the viewport, together with its bounding box and the element resolved under the stroke's centroid: it flows into the same `annot:add` payload as point comments, with `kind: 'draw'`, hence into the same feed that reaches Claude.
+
+### Added (Bridge)
+
+- **`/__claude` accepts a new `readOnly` mode**, alongside `allowEdits`: it confines the agent to non-mutating tools (`Read,Grep,Glob,WebFetch,WebSearch`, no Bash/Edit/Write), with a 180s budget and a system prompt tailored to answering inside a live demo in a deck ("never create or modify files, or run shell commands"). `allowEdits` wins if both flags are set, so `readOnly` can never widen an edit session. Not wired to a UI control yet: for now it must be passed explicitly in the POST body.
+
+### Changed
+
+- **The selector turns white.** The colour was hand-written in 6 places in the client: the palette now lives in CSS variables (`--aimax-sel`, `--aimax-edit`, `--aimax-accent`, `--aimax-draw`) defined once. The selection frame and its handles are white with a thin dark contrast line — they are editor chrome, and every tool the user already knows draws them neutral, leaving colour to the artifact. Bright tints stay for **state** (comment cyan, edit orange, draw pink).
+- The Notes icon is no longer the only emoji in the bar: an SVG silhouette like the others.
+
+- **Panel reorganised: modes on top, actions below.** The header carried sub-modes, Save and six action buttons all at once, and with Move/Resize arriving it had become unreadable. The header now answers a single question — *where am I* — and everything you **do** with what you have collected sits in an action row below.
+  - **Freehand drawing becomes an annotation sub-mode**, not a toolbar button: both pointing and drawing produce comments, so they are two ways of doing the same job. The top toolbar now has only two mode buttons (💬 Annotate, ✏ Edit) and the pen lives in the panel header next to 👆 Point.
+  - **Edit's sub-modes are three explicit toggle buttons**: **T Text** (default), **✥ Move/Resize**, **📝 Notes**. Before, "text" was the implicit state you got by switching the other two off, and there was no way to see which one you were in. Entering Edit always lands on Text.
+  - Copy · `>_` · `</>` · ✱ · ⟳ · 🗑 moved into the action row, together with (never at the same time as) the Move/Resize tools.
+
+### Fixed
+
+- **Copying from the viewer never worked**: in the Browser Panel the `Cmd/Ctrl+C` handler was attached to `frame.contentDocument`, which is always cross-origin (`vscode-webview://` against `http://127.0.0.1`) — the `try` threw, the `catch` swallowed it, and the handler was never installed; the fallback on the panel's own document read the panel's selection, always empty, because the selected text lives in the iframe. In the Home Panel there was no handler at all. It now lives in the injected client, the only place that actually sees the selection, and hands it to the host via `copyToClipboard`: it works in both panels, with annotation mode on or off, and it also covers the context menu ▸ Copy (the `copy` event, not just the shortcut).
+
+- **`deploy.sh` no longer bumps the version unless asked to** (`--bump`). Bumping on every run silently violated the in-flight version rule and left the changelog documenting a number that no longer existed. The script also deleted the freshly built package with `rm -f aimax-viewer-*.vsix` — precisely the artifact needed to reinstall or roll back: it now removes only the ones belonging to other versions.
+
+- **The VSIX contained a backup of another VSIX** (280 KB out of 547): `.vscodeignore` did not exclude `.bak` files. Package back down to ~275 KB.
+
+- **The Home Panel's relative links went nowhere**: `navigateLocal` looked for the file under a `projects/` folder hard-coded in the source — a leftover from an old layout — so a link to a file sitting next to the index opened nothing, with no error anywhere. The search now starts from the **workspace root**, with the path constrained to stay inside it, and if the file is not there it says so.
+
+- **Selection survives a sub-mode switch**: you were resizing a frame, you switch to Text, and the caret now lands inside that element instead of making you find it by eye again; from Text to Move/Resize, the frame containing the spot you were typing in becomes the selected one; switching to Annotate opens the popup already on that element. A reference to the element could not survive — switching sub-mode rewrites the DOM, because text mode wraps text fragments in temporary spans — so the **verified-unique selector** is remembered and re-attached on the other side: the same mechanism we use to write to file, reused for continuity of work.
+
+- **The Slide Sorter's save walled the injected client into the source (serious — it corrupted the artifact)**: the sorter read the deck with `fetch(deckBaseUrl)`, i.e. the **served** URL, which by construction contains the `<script data-aimax-injected>` before `</body>`. Splitting the text into head + sections + tail, that script ended up in the tail and was written back to the file. On the next save the sorter re-read a file that already contained one, the server injected another on top, and the count climbed: on the sample artifact **12 copies, from 80 KB to 240 KB** — 160 KB of duplicated client, introduced by the very commit that added the sorter.
+  - The damage was not only weight. The client starts with `if (window.__aimaxAnnotationLoaded) return;`: the oldest copy walled into the file ran first and raised the flag, and **the fresh client injected by the server bailed out on its second line**. Result: the page ran forever with the client version frozen into the file, while toolbar and panel were the new ones — hence the orange pen instead of the white selector, and the edit popup from two versions back.
+  - Every read of the source destined to be written back now goes through `fetchDeckSource()`, which asks for `?aimax-raw=1` (the file exactly as it is on disk). This covers both the sorter and the notes save.
+  - **Safety net at the point of writing**: `writeDeckFile()` strips every `<script data-aimax-injected>` before writing anyway, and logs that it did. It is the only place whole files get rewritten, so no future client can repeat the damage even by reading wrong.
+  - **The sample artifact was exactly this case**: `Artifacts/aimax-viewer-presentation.html` carried the 12 walled-in copies of the client inside the "Add Bridge to this page" slide (235 KB → 75 KB after cleanup). Cleaned in the same pass; if you see ~4000 lines removed from that file in this release's diff, this is why — not lost content.
+
+- **Notes on artifacts that have none**: turning the Notes sub-mode on for a file with no `.speaker-notes` blocks revealed nothing and made nothing editable, without saying why. The page now reports how many it found and the panel spells it out: "this artifact has no speaker notes", pointing you back to Text.
+
+- **Restacking with nothing underneath**: z-order commands on a frame that overlaps nothing wrote a rule that changed nothing visible — stacking decides who paints on top only where two elements share pixels, and in normal flow that does not happen. The command now stops and explains, instead of looking broken.
+
+- **Discarding a text edit did not put the text back**: clicking the ✏ badge took the edit out of the save queue, but the new version stayed on screen — you saw one thing and the file contained another. Discarding now restores the original words too. If the edit has already been written to disk, discarding no longer touches the text (the file contains the new version: putting it back on screen only would recreate exactly the divergence this fixed); in that case the badge is already grey and labelled "Saved".
+
+- **"Reset frame" lied after a save**: it removed the pending edit and restored the inline style, but the rule already written into the `<style data-aimax-layout>` block is `!important` and stayed — the frame went back to where it was *at save time*, not where it was originally, without saying so. The client now reads the block from the served page, so it knows which frames already have an override on file: the restore deletes the rule from the live stylesheet too (the preview matches what will be written) and queues the rule's **removal**, which drops it from the file on Save. Removing the declarations is the only correct neutral: overwriting them with `auto`/`none` would leave an `!important` rule still beating the artifact's own CSS. When the last override falls, the whole block is removed and the file returns exactly to its starting markup.
+  - The button is now called **⤺ Back to original** (it was "Reset frame", which said neither what it restored nor how far back) and enables only if the selected frame really has an override, pending or already on file.
+  - Selecting a frame updates the buttons immediately: state used to travel only once a gesture completed, so the button stayed grey at precisely the moment it was needed.
+
+- **The old injected client came back from the webview cache**: the `no-store` introduced in this same version prevents *new* cache entries from being created, but does not evict the ones left by earlier builds (which sent `etag`/`last-modified` and no `cache-control`): the iframe served them back with the annotation client from the version they were saved under, so the toolbar was new and the page behaved like the old one — in Edit the text popup appeared instead of the current behaviour. The iframe now always loads with a throwaway `__aimaxcb` parameter (first load, navigation and ⟳), so the cache key no longer matches the legacy entries. The URL the panel tracks stays clean: address bar, history, presenter and resolving the file to edit all read that one, and the server strips the query before resolving the file. `/__proxy__/`, `/__presenter` and `/api/` are excluded.
+
+- **Presenter on long decks — `lesson-mode=fullpage` and iframe multiplication (MTX-19)**: the presenter opened one iframe per slide, each a full load of the deck. On a 157-slide deck that meant 159 iframes instantiated together (157 carousel + current + next) and the page froze for seconds.
+  - **Lazy thumbnails, mounted through a queue**: carousel and sorter tiles start as text-only placeholders (the slide title) and mount their iframe only when they come on screen, going through a queue that starts at most 4 at a time — the ones closest to the centre of the screen first — and starts a new one as soon as one finishes. What froze the page was not the number of live iframes but having instantiated them all in the same frame. Off-screen tiles are evicted down to `THUMB_BUDGET` (24); the ones the user is looking at stay, up to a hard ceiling of `THUMB_CEILING` (64). On a 157-slide deck: **159 → 26 iframes** in steady state, stable when jumping to the end of the deck and when scrolling the carousel; the worst case (sorter open and zoomed all the way out, 97 tiles on screen) stops at 64 previews and a single ~116 ms long task, against seconds of freeze before. Past the ceiling, tiles stay placeholders with the title.
+  - Opening the sorter unmounts the carousel thumbnails, which the overlay covers entirely: they were invisible iframes occupying slots the sorter tiles needed. Closing it brings them back.
+  - **`<meta name="lesson-mode" content="fullpage">` is now honoured**: a deck that declares it does not want to be split owns its own navigation, so it is driven through the `postMessage` bridge (`aimax-lesson-goto`, 1-based slide) instead of merely scrolling its DOM. Before, the meta was simply ignored.
+  - The jump is still also performed as an instant scroll: the reference bridge scrolls `smooth`, which on a deck with scroll-snap animates through every intermediate slide and can settle one section further on. As a side effect, a deck that declares the meta but does not implement the bridge keeps navigating instead of sitting mute on slide 1.
+  - **Indices aligned with the bridge**: in fullpage mode sections are counted with the contract's reference selector (`main section` when it exists, `section` otherwise), so the presenter's slide N is the deck's slide N. Each slide now also carries its own `sourceIndex` (its position among **all** the `section`s in the file): the notes save goes through that, otherwise on a deck with sections both inside and outside `<main>` it would have written — with no error and a "Saved" result — onto another slide's notes.
+  - In the sorter too, fullpage deck previews are driven with the bridge as well as with scrolling: the sorter indexes the **raw source**, and since it only opens when that order matches the presented one (see below), the raw index is also the bridge's slide number. So a fullpage deck with its own navigation shows the right slide in every tile instead of slide 1 everywhere.
+  - Closing the sorter unmounts its thumbnails instead of leaving them alive behind the presenter.
+  - The sorter now refuses to open, explaining why, when the source contains more `<section>`s than the deck presents (fullpage with sections outside `<main>`): reordering would have renumbered and moved sections the presenter does not show, and saving would have lost the markup between sections (the `<main>` wrapper, for one).
+
+### Fixed (surfaced during MTX-19 testing, pre-existing)
+
+- **Hidden slides never revealed themselves**: clicking a `data-hidden` slide from the carousel updated the counter and the title, but the preview stayed on the previous slide. The injected hiding rule is `display:none !important` and the reveal used an inline style without `!important`, so it always lost. The reveal is now `!important` in all three places (current preview, fullpage branch, audience window).
+- **The sorter's zoom reloaded every preview**: `layoutSorter()` re-`appendChild`ed every tile on every call, and moving an iframe within the DOM reloads it — so every notch of the zoom slider and every click on the eye threw away all the mounted previews. Only tiles genuinely out of position are moved now: a zoom reloads nothing, a reorder reloads only the tiles that moved.
+- **`TypeError` on decks with no sections**: a `slideChanged` message from the audience window sent `updatePresenterView()` to read a slide that did not exist.
+
+- **Remote HTTP services in the browser panel (MTX-18)**: opening a service served over plain HTTP (e.g. `http://minimacs.local:8788`, a Tailscale IP) showed a silent blank page in the browser panel iframe. The webview CSP had no explicit `frame-src` and allowed only `localhost`/`127.0.0.1` over HTTP plus the CDNs (always HTTPS), so it blocked the host.
+  - New setting `aimaxViewer.csp.allowedHttpHosts` (array, default `[]`): each listed host is allowed as `http://<host>:*` in `default-src`/`frame-src` and in the resource directives.
+  - Added an explicit `frame-src` to the CSP (localhost + configured HTTP hosts) so the iframe no longer inherits `default-src` alone.
+
+---
+
 ## [0.1.33] - 2026-06-15
 
 ### Added

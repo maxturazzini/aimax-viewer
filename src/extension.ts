@@ -77,13 +77,15 @@ function applyConfigToggle(key: string, value: unknown): void {
 // Run Claude Bridge action for given mode/prompt and call back with result.
 // Used by both the /__claude HTTP endpoint (proxy-injected pages and skill artifacts)
 // and the toolbar Bridge dropdown (webview chrome via postMessage).
-function handleClaudeBridge(mode: string, prompt: string, callback: (result: BridgeResult) => void, opts?: { allowEdits?: boolean }): void {
+function handleClaudeBridge(mode: string, prompt: string, callback: (result: BridgeResult) => void, opts?: { allowEdits?: boolean; readOnly?: boolean }): void {
     if (!prompt) {
         callback({ ok: false, error: 'Empty prompt' });
         return;
     }
     const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     const allowEdits = !!opts?.allowEdits;
+    // allowEdits wins if both are set, so readOnly can never widen an edit session.
+    const readOnly = !allowEdits && !!opts?.readOnly;
 
     if (mode === 'vscode') {
         const claudeUri = vscode.Uri.parse(
@@ -109,18 +111,26 @@ function handleClaudeBridge(mode: string, prompt: string, callback: (result: Bri
     }
 
     if (mode === 'print') {
-        // Two flavors:
+        // Three flavors:
         //   chat (default) — quick conversational answer, no tools, no file changes (~60s budget)
+        //   readOnly — answers using non-mutating tools only, for artifacts that need
+        //              real context (workspace files) but must never write (~3min budget)
         //   edit (allowEdits) — full agent with auto-approved permissions (~5min budget)
         const args = ['-p', '--no-session-persistence'];
         if (allowEdits) {
             args.push('--dangerously-skip-permissions');
+        } else if (readOnly) {
+            // Explicit allowlist. Every tool here is non-mutating: no Bash, no Edit/Write.
+            args.push('--tools', '"Read,Grep,Glob,WebFetch,WebSearch"');
+            // Appended rather than replacing: the default system prompt carries the
+            // tool-use guidance these tools need in order to be used well.
+            args.push('--append-system-prompt', '"You are answering inside a live slide deck during a demo. Your tools are read-only: never create, modify or delete files, and never run shell commands. Keep answers under 5 sentences unless more detail is requested. Reply in the language of the question."');
         } else {
             args.push('--tools', '""');
             args.push('--system-prompt', '"You are a concise assistant. Answer in 1-3 sentences. Do not modify any files; describe changes only if asked."');
         }
         args.push('-');
-        const timeoutMs = allowEdits ? 300000 : 60000;
+        const timeoutMs = allowEdits ? 300000 : (readOnly ? 180000 : 60000);
         const child = spawn('claude', args, {
             cwd: workspaceFolder,
             shell: true,
@@ -183,6 +193,7 @@ function getConfig() {
             'cdnjs.cloudflare.com',
             'unpkg.com'
         ]),
+        cspAllowedHttpHosts: config.get<string[]>('csp.allowedHttpHosts', []),
         browserLayout: config.get<string>('browser.layout', 'sidebar'),
         browserFolders: config.get<FolderConfig[]>('browser.folders', [
             { label: 'Artifacts', path: 'Artifacts' }
@@ -213,7 +224,17 @@ function generateCSP(): string {
     const domains = config.cspAllowedDomains;
     const httpsScheme = domains.map(d => `https://${d}`).join(' ');
 
-    return `default-src 'self' http://127.0.0.1:* http://localhost:*; script-src 'self' 'unsafe-inline' http://127.0.0.1:* http://localhost:* ${httpsScheme}; style-src 'self' 'unsafe-inline' http://127.0.0.1:* http://localhost:* ${httpsScheme}; img-src 'self' data: http://127.0.0.1:* http://localhost:* ${httpsScheme}; font-src 'self' data: http://127.0.0.1:* http://localhost:* ${httpsScheme}; connect-src 'self' http://127.0.0.1:* http://localhost:* ${httpsScheme};`;
+    // Extra plain-HTTP hosts (e.g. minimacs.local, Tailscale IPs) so remote HTTP
+    // services load in the browser panel iframe. Empty by default.
+    const httpHosts = config.cspAllowedHttpHosts || [];
+    const httpScheme = httpHosts.map(h => `http://${h}:*`).join(' ');
+    const extra = [httpsScheme, httpScheme].filter(Boolean).join(' ');
+
+    // Explicit frame-src so the iframe can load the http hosts (otherwise it
+    // inherits default-src). Includes localhost + the http hosts.
+    const frameSrc = ['http://127.0.0.1:*', 'http://localhost:*', httpScheme].filter(Boolean).join(' ');
+
+    return `default-src 'self' http://127.0.0.1:* http://localhost:* ${extra}; frame-src 'self' ${frameSrc}; script-src 'self' 'unsafe-inline' http://127.0.0.1:* http://localhost:* ${extra}; style-src 'self' 'unsafe-inline' http://127.0.0.1:* http://localhost:* ${extra}; img-src 'self' data: http://127.0.0.1:* http://localhost:* ${extra}; font-src 'self' data: http://127.0.0.1:* http://localhost:* ${extra}; connect-src 'self' http://127.0.0.1:* http://localhost:* ${extra};`;
 }
 
 // Find workspace root by looking for Artifacts directory
@@ -902,6 +923,26 @@ function urlToWorkspacePath(url: string): { absolute: string; relative: string }
     }
 }
 
+// Host-side twin of the panel script's cacheBusted() (same gates), needed for
+// the iframe's FIRST load: that src attribute is rendered before any panel
+// script runs, and it's the load most likely to hit a legacy cache entry left
+// by an older build. Only the iframe src is busted — the URL the panel tracks
+// stays clean.
+function cacheBustUrl(url: string): string {
+    try {
+        const u = new URL(url);
+        const local = u.hostname === '127.0.0.1' || u.hostname === 'localhost';
+        if (!local || u.port !== String(serverPort)) return url;
+        if (u.pathname.startsWith('/__proxy__/')
+            || u.pathname.startsWith('/__presenter')
+            || u.pathname.startsWith('/api/')) return url;
+        u.searchParams.set('__aimaxcb', String(Date.now()));
+        return u.toString();
+    } catch {
+        return url;
+    }
+}
+
 // Resolve a directly-supplied file path (Home Panel case). Mirrors the gates
 // of urlToWorkspacePath() so the save handler can trust both entry points.
 function filePathToWorkspacePath(filePath: string): { absolute: string; relative: string } | null {
@@ -1031,10 +1072,270 @@ function applyHtmlEdits(absolutePath: string, edits: HtmlEditRequest[]): HtmlEdi
     return out;
 }
 
+// ---- Layout persistence (Edit mode → Move/Resize sub-mode) ----
+//
+// Moving or resizing a frame must NOT rewrite the artifact's markup: an
+// anchored text replace can't safely patch an opening tag (attribute order and
+// quoting never round-trip), and rewriting elements would break every other
+// anchor in the file. Instead every gesture becomes a CSS rule keyed on a
+// selector the client verified resolves to exactly one element, merged into a
+// single <style data-aimax-layout> block kept at the end of <body>. The block
+// is idempotent (re-saving the same selector overwrites its declarations), it
+// is trivially removable by hand, and it survives alongside text edits.
+interface LayoutEditRequest {
+    n: number;
+    selector: string;
+    css: Record<string, string>;
+    // Revert: drop this selector's rule from the block entirely. Removing the
+    // declaration is the only correct neutral — overriding with `auto`/`none`
+    // would keep an !important rule that beats the artifact's own CSS.
+    remove?: boolean;
+}
+
+const LAYOUT_BLOCK_RE = /<style\s+data-aimax-layout(?:\s*=\s*"[^"]*")?[^>]*>([\s\S]*?)<\/style>/i;
+
+// Only geometry and stacking are writable — the sub-mode moves, resizes and
+// reorders, it is not a general-purpose CSS injector.
+const LAYOUT_PROPS = new Set([
+    'transform', 'width', 'height', 'box-sizing',
+    'min-width', 'min-height', 'max-width', 'max-height',
+    // Ride along with 'transform' on SVG shapes only, where the rotation
+    // reference differs from HTML: transform-box defaults to view-box and
+    // transform-origin to 0 0, which together would rotate the shape about the
+    // diagram's corner instead of its own centre.
+    'transform-box', 'transform-origin',
+    // z-order: 'position' rides along because z-index is inert on a static
+    // element, so raising one means making it positioned first.
+    'z-index', 'position',
+    // Delete-a-frame is display:none — the markup stays in the file, so the
+    // action is reversible by removing one declaration.
+    'display'
+]);
+
+// 'position' is the one whitelisted property that can restructure a layout, so
+// its value is checked against the keyword set rather than the generic pattern.
+const LAYOUT_POSITION_VALUES = new Set(['static', 'relative', 'absolute', 'fixed', 'sticky']);
+
+const LAYOUT_TRANSFORM_BOX_VALUES = new Set([
+    'content-box', 'border-box', 'fill-box', 'stroke-box', 'view-box'
+]);
+
+// One to three position components: keywords, lengths or percentages. Narrow on
+// purpose — the client only ever writes '50% 50%'.
+const LAYOUT_ORIGIN_COMPONENT = '(?:center|top|bottom|left|right|-?\\d+(?:\\.\\d+)?(?:px|%|em|rem)?)';
+const LAYOUT_ORIGIN_RE = new RegExp(
+    '^' + LAYOUT_ORIGIN_COMPONENT + '(?:\\s+' + LAYOUT_ORIGIN_COMPONENT + '){0,2}$', 'i');
+
+// 'display' exists only to hide a frame and to put it back; anything else would
+// be a layout rewrite, which this channel is not for.
+const LAYOUT_DISPLAY_VALUES = new Set([
+    'none', 'block', 'inline', 'inline-block', 'flex', 'inline-flex',
+    'grid', 'inline-grid', 'contents', 'list-item', 'table', 'table-cell', 'table-row'
+]);
+
+function sanitizeLayoutSelector(sel: unknown): string | null {
+    if (typeof sel !== 'string') return null;
+    const s = sel.trim();
+    if (!s || s.length > 400) return null;
+    // Structural selectors and #ids only — nothing that could close the <style>
+    // element or smuggle an at-rule into the file. '>' is the child combinator
+    // we rely on and must stay allowed; '<' is what would break out of <style>.
+    if (!/^[A-Za-z0-9_#.:>()\-\s]+$/.test(s)) return null;
+    if (/[{}<;@*]/.test(s)) return null;
+    return s;
+}
+
+function sanitizeLayoutValue(prop: string, val: unknown): string | null {
+    if (typeof val !== 'string') return null;
+    const v = val.trim().replace(/\s*!important\s*$/i, '').trim();
+    if (!v || v.length > 200) return null;
+    if (!/^[A-Za-z0-9 .,%()+\-_/]+$/.test(v)) return null;
+    if (/url\s*\(/i.test(v)) return null;
+    if (prop === 'position' && !LAYOUT_POSITION_VALUES.has(v.toLowerCase())) return null;
+    if (prop === 'z-index' && !/^(auto|-?\d{1,6})$/.test(v)) return null;
+    if (prop === 'transform-box' && !LAYOUT_TRANSFORM_BOX_VALUES.has(v.toLowerCase())) return null;
+    if (prop === 'transform-origin' && !LAYOUT_ORIGIN_RE.test(v)) return null;
+    if (prop === 'display' && !LAYOUT_DISPLAY_VALUES.has(v.toLowerCase())) return null;
+    return v;
+}
+
+function parseLayoutBlock(rawCss: string): Map<string, Map<string, string>> {
+    const map = new Map<string, Map<string, string>>();
+    // Comments would otherwise be swallowed into the following selector, which
+    // then fails sanitization and silently drops that rule on the next merge.
+    const css = rawCss.replace(/\/\*[\s\S]*?\*\//g, ' ');
+    const re = /([^{}]+)\{([^{}]*)\}/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(css)) !== null) {
+        const sel = sanitizeLayoutSelector(m[1]);
+        if (!sel) continue;
+        const decls = new Map<string, string>();
+        for (const part of m[2].split(';')) {
+            const i = part.indexOf(':');
+            if (i < 0) continue;
+            const prop = part.slice(0, i).trim().toLowerCase();
+            const value = sanitizeLayoutValue(prop, part.slice(i + 1));
+            if (!LAYOUT_PROPS.has(prop) || !value) continue;
+            decls.set(prop, value);
+        }
+        if (decls.size) map.set(sel, decls);
+    }
+    return map;
+}
+
+function serializeLayoutBlock(map: Map<string, Map<string, string>>): string {
+    const lines: string[] = ['<style data-aimax-layout="1">'];
+    lines.push('/* AIMax Viewer — layout overrides (Edit > Move/Resize). Machine-managed:');
+    lines.push('   safe to delete wholesale, but hand edits here get rewritten on the next save. */');
+    for (const [sel, decls] of map) {
+        const body = Array.from(decls).map(([p, v]) => p + ': ' + v + ' !important;').join(' ');
+        lines.push(sel + ' { ' + body + ' }');
+    }
+    lines.push('</style>');
+    return lines.join('\n');
+}
+
+function applyLayoutEdits(absolutePath: string, rules: LayoutEditRequest[]): HtmlEditOutcome {
+    const out: HtmlEditOutcome = { applied: [], failed: [] };
+    let source: string;
+    try {
+        source = fs.readFileSync(absolutePath, 'utf8');
+    } catch (err: any) {
+        for (const r of rules) out.failed.push({ n: r.n, reason: 'Read error: ' + (err?.message || err) });
+        return out;
+    }
+    if (!editBackupOnce.has(absolutePath)) {
+        try {
+            fs.writeFileSync(absolutePath + '.bak', source, 'utf8');
+            editBackupOnce.add(absolutePath);
+        } catch (err: any) {
+            for (const r of rules) out.failed.push({ n: r.n, reason: 'Backup failed: ' + (err?.message || err) });
+            return out;
+        }
+    }
+    const existing = LAYOUT_BLOCK_RE.exec(source);
+    const map = existing ? parseLayoutBlock(existing[1]) : new Map<string, Map<string, string>>();
+    for (const r of rules) {
+        const sel = sanitizeLayoutSelector(r.selector);
+        if (!sel) {
+            out.failed.push({ n: r.n, reason: 'Unsafe or unusable selector — layout not written' });
+            continue;
+        }
+        if (r.remove) {
+            map.delete(sel);
+            out.applied.push(r.n);
+            continue;
+        }
+        const incoming = (r.css && typeof r.css === 'object') ? r.css : {};
+        const decls = map.get(sel) || new Map<string, string>();
+        let wrote = 0;
+        for (const rawProp of Object.keys(incoming)) {
+            const prop = rawProp.trim().toLowerCase();
+            if (!LAYOUT_PROPS.has(prop)) continue;
+            const value = sanitizeLayoutValue(prop, incoming[rawProp]);
+            if (!value) continue;
+            decls.set(prop, value);
+            wrote++;
+        }
+        if (!wrote) {
+            out.failed.push({ n: r.n, reason: 'No writable geometry properties in payload' });
+            continue;
+        }
+        map.set(sel, decls);
+        out.applied.push(r.n);
+    }
+    if (!out.applied.length) return out;
+
+    // Reverting the last override leaves no block behind — the file goes back to
+    // exactly the markup it had before AIMax ever touched its layout.
+    if (map.size === 0) {
+        if (!existing) return out;
+        const head = source.slice(0, existing.index).replace(/[ \t]*\n?$/, '');
+        const tail = source.slice(existing.index + existing[0].length).replace(/^\n/, '');
+        try {
+            fs.writeFileSync(absolutePath, head + '\n' + tail, 'utf8');
+        } catch (err: any) {
+            const failedAll = out.applied.map(n => ({ n, reason: 'Write error: ' + (err?.message || err) }));
+            return { applied: [], failed: [...failedAll, ...out.failed] };
+        }
+        return out;
+    }
+
+    const block = serializeLayoutBlock(map);
+    let working: string;
+    if (existing) {
+        working = source.slice(0, existing.index) + block + source.slice(existing.index + existing[0].length);
+    } else {
+        const idx = source.toLowerCase().lastIndexOf('</body>');
+        working = idx >= 0
+            ? source.slice(0, idx) + block + '\n' + source.slice(idx)
+            : source + '\n' + block + '\n';
+    }
+    try {
+        fs.writeFileSync(absolutePath, working, 'utf8');
+    } catch (err: any) {
+        const failedAll = out.applied.map(n => ({ n, reason: 'Write error: ' + (err?.message || err) }));
+        return { applied: [], failed: [...failedAll, ...out.failed] };
+    }
+    return out;
+}
+
+// Drop the whole layout block: the artifact goes back to laying itself out.
+// This is the only way out of a state the UI can otherwise not undo — a frame
+// hidden with Delete has no box left to click, so after a reload there is
+// nothing to select and revert.
+function removeLayoutBlock(absolutePath: string): { ok: boolean; removed: boolean; error?: string } {
+    try {
+        const source = fs.readFileSync(absolutePath, 'utf8');
+        const m = LAYOUT_BLOCK_RE.exec(source);
+        if (!m) return { ok: true, removed: false };
+        if (!editBackupOnce.has(absolutePath)) {
+            fs.writeFileSync(absolutePath + '.bak', source, 'utf8');
+            editBackupOnce.add(absolutePath);
+        }
+        const head = source.slice(0, m.index).replace(/[ \t]*\n?$/, '');
+        const tail = source.slice(m.index + m[0].length).replace(/^\n/, '');
+        fs.writeFileSync(absolutePath, head + '\n' + tail, 'utf8');
+        return { ok: true, removed: true };
+    } catch (err: any) {
+        return { ok: false, removed: false, error: err?.message || String(err) };
+    }
+}
+
+// Put the file back to the copy taken before this session's first edit.
+function restoreFileFromBackup(absolutePath: string): { ok: boolean; error?: string } {
+    const bak = absolutePath + '.bak';
+    try {
+        if (!fs.existsSync(bak)) return { ok: false, error: 'no-backup' };
+        fs.copyFileSync(bak, absolutePath);
+        // The .bak now matches the file, so the next edit should take a fresh
+        // one rather than reuse this session's marker.
+        editBackupOnce.delete(absolutePath);
+        return { ok: true };
+    } catch (err: any) {
+        return { ok: false, error: err?.message || String(err) };
+    }
+}
+
 // Full-file overwrite used by the Slide Sorter (reorder / hide-show), which
 // rewrites the whole deck rather than patching individual blocks. Writes a
 // one-per-session .bak first (same policy as applyHtmlEdits) so the original
 // on-disk content is always recoverable.
+// AIMax injects its annotation/edit and link-handler clients into every served
+// HTML response. Anything that round-trips a served page back to disk therefore
+// risks writing those scripts INTO the source — and because the client
+// self-disables when it finds one already loaded, a baked-in copy silently
+// pins the artifact to the version it was saved under, while every save adds
+// another. Callers should read the source with ?aimax-raw=1; this is the
+// backstop at the one place where whole files get written.
+const INJECTED_SCRIPT_RE = /[ \t]*<script\s+data-aimax-injected(?:\s*=\s*"[^"]*")?[^>]*>[\s\S]*?<\/script>\n?/gi;
+
+export function stripInjectedClients(html: string): { html: string; removed: number } {
+    let removed = 0;
+    const out = html.replace(INJECTED_SCRIPT_RE, () => { removed++; return ''; });
+    return { html: out, removed };
+}
+
 function writeDeckFile(absolutePath: string, content: string): { ok: boolean; error?: string } {
     try {
         if (!editBackupOnce.has(absolutePath)) {
@@ -1042,7 +1343,11 @@ function writeDeckFile(absolutePath: string, content: string): { ok: boolean; er
             fs.writeFileSync(absolutePath + '.bak', source, 'utf8');
             editBackupOnce.add(absolutePath);
         }
-        fs.writeFileSync(absolutePath, content, 'utf8');
+        const cleaned = stripInjectedClients(content);
+        if (cleaned.removed > 0) {
+            console.warn('[AIMax] Stripped ' + cleaned.removed + ' injected client script(s) before writing ' + absolutePath);
+        }
+        fs.writeFileSync(absolutePath, cleaned.html, 'utf8');
         return { ok: true };
     } catch (err: any) {
         return { ok: false, error: err?.message || String(err) };
@@ -1057,15 +1362,70 @@ function resolveEditTarget(message: any): { absolute: string; relative: string }
     return null;
 }
 
+// The two "put it back" commands from the hamburger menu. Both rewrite the file,
+// so both ask first — and both are phrased in terms of what SURVIVES, since that
+// is the only difference the person clicking cares about.
+function handleRestore(message: any, panel: vscode.WebviewPanel | undefined): void {
+    const target = resolveEditTarget(message);
+    if (!target) {
+        vscode.window.showWarningMessage('AIMax: this page is not an editable .html served from your workspace.');
+        return;
+    }
+    const name = path.basename(target.absolute);
+    const reload = () => panel?.webview.postMessage({ command: 'reloadFrame' });
+
+    if (message.command === 'restoreLayout') {
+        vscode.window.showWarningMessage(
+            'Put every element of "' + name + '" back where the page itself places it?',
+            { modal: true, detail: 'Undoes moves, resizes, rotations, stacking order and hidden frames. Your text edits are kept.' },
+            'Restore layout'
+        ).then(choice => {
+            if (choice !== 'Restore layout') return;
+            const out = removeLayoutBlock(target.absolute);
+            if (!out.ok) {
+                vscode.window.showErrorMessage('AIMax: could not restore layout — ' + out.error);
+            } else if (!out.removed) {
+                vscode.window.showInformationMessage('AIMax: this file has no layout changes to undo.');
+            } else {
+                vscode.window.showInformationMessage('AIMax: original layout restored in ' + name + '.');
+                reload();
+            }
+        });
+        return;
+    }
+
+    const bakExists = fs.existsSync(target.absolute + '.bak');
+    if (!bakExists) {
+        vscode.window.showInformationMessage('AIMax: no backup for ' + name + ' yet — one is written automatically before the first edit of a session.');
+        return;
+    }
+    vscode.window.showWarningMessage(
+        'Bring "' + name + '" back to how it was before your first edit in this session?',
+        { modal: true, detail: 'Undoes everything AIMax wrote to this file since the panel opened, text edits included. Anything saved before that stays.' },
+        'Restore file'
+    ).then(choice => {
+        if (choice !== 'Restore file') return;
+        const out = restoreFileFromBackup(target.absolute);
+        if (!out.ok) {
+            vscode.window.showErrorMessage('AIMax: could not restore — ' + (out.error === 'no-backup' ? 'the backup disappeared' : out.error));
+            return;
+        }
+        vscode.window.showInformationMessage('AIMax: ' + name + ' restored from backup.');
+        reload();
+    });
+}
+
 function handleSaveEdit(message: any, panel: vscode.WebviewPanel | undefined): void {
     if (!panel) return;
     const target = resolveEditTarget(message);
     const edits = Array.isArray(message.edits) ? message.edits as HtmlEditRequest[] : [];
+    const layout = Array.isArray(message.layout) ? message.layout as LayoutEditRequest[] : [];
+    const allNs = [...edits.map(e => e.n), ...layout.map(l => l.n)];
     if (!target) {
         panel.webview.postMessage({
             command: 'saveEditResult',
             applied: [],
-            failed: edits.map(e => ({ n: e.n, reason: 'File not eligible for edit (not an AIMax-served .html under workspace)' }))
+            failed: allNs.map(n => ({ n, reason: 'File not eligible for edit (not an AIMax-served .html under workspace)' }))
         });
         return;
     }
@@ -1074,11 +1434,21 @@ function handleSaveEdit(message: any, panel: vscode.WebviewPanel | undefined): v
         panel.webview.postMessage({
             command: 'saveEditResult',
             applied: [],
-            failed: edits.map(e => ({ n: e.n, reason: 'Path escapes workspace' }))
+            failed: allNs.map(n => ({ n, reason: 'Path escapes workspace' }))
         });
         return;
     }
-    const outcome = applyHtmlEdits(target.absolute, edits);
+    // Text first, then layout: applyHtmlEdits writes synchronously, so the
+    // layout pass re-reads the already-updated source and its <style> block
+    // insertion can't invalidate the verbatim anchors of the text edits.
+    const outcome: HtmlEditOutcome = edits.length
+        ? applyHtmlEdits(target.absolute, edits)
+        : { applied: [], failed: [] };
+    if (layout.length) {
+        const layoutOutcome = applyLayoutEdits(target.absolute, layout);
+        outcome.applied.push(...layoutOutcome.applied);
+        outcome.failed.push(...layoutOutcome.failed);
+    }
     panel.webview.postMessage({ command: 'saveEditResult', ...outcome });
 }
 
@@ -1282,6 +1652,12 @@ function openInBrowser(url: string, customTitle?: string) {
                 newPanel.title = message.title;
             } else if (message.command === 'openCurrentFile') {
                 vscode.commands.executeCommand('aimaxViewer.openCurrentFile');
+            } else if (message.command === 'restoreLayout' || message.command === 'restoreBackup') {
+                handleRestore(message, newPanel);
+            } else if (message.command === 'openDevTools') {
+                // Webview devtools, not the window's: this opens the console of
+                // the panel itself, which is where the viewer's own errors land.
+                vscode.commands.executeCommand('workbench.action.webview.openDeveloperTools');
             } else if (message.command === 'openTerminal') {
                 vscode.commands.executeCommand('aimaxViewer.openTerminal');
             } else if (message.command === 'openClaudeCode') {
@@ -1344,6 +1720,12 @@ function openInBrowser(url: string, customTitle?: string) {
                 }
             } else if (message.command === 'openCurrentFile') {
                 vscode.commands.executeCommand('aimaxViewer.openCurrentFile');
+            } else if (message.command === 'restoreLayout' || message.command === 'restoreBackup') {
+                handleRestore(message, browserPanel);
+            } else if (message.command === 'openDevTools') {
+                // Webview devtools, not the window's: this opens the console of
+                // the panel itself, which is where the viewer's own errors land.
+                vscode.commands.executeCommand('workbench.action.webview.openDeveloperTools');
             } else if (message.command === 'openTerminal') {
                 vscode.commands.executeCommand('aimaxViewer.openTerminal');
             } else if (message.command === 'openClaudeCode') {
@@ -1719,6 +2101,11 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
             border-color: #ff9500;
             background: rgba(255, 149, 0, 0.14);
         }
+        .toolbar-btn.active-draw {
+            color: #ff2d92;
+            border-color: #ff2d92;
+            background: rgba(255, 45, 146, 0.14);
+        }
         .toolbar-btn:disabled {
             opacity: 0.35;
             cursor: not-allowed;
@@ -1730,6 +2117,40 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
         .aimax-icon-btn.aimax-save-btn:not(:disabled):hover { background: rgba(52, 199, 89, 0.15); }
         .aimax-icon-btn.aimax-save-btn .save-text { font-size: 11px; font-weight: 600; letter-spacing: 0.3px; }
         .aimax-icon-btn.notes-active { background: rgba(181, 137, 0, 0.20); border-color: #b58900; color: #ffcc44; }
+        .aimax-icon-btn.layout-active { background: rgba(255, 149, 0, 0.22); border-color: #ff9500; color: #ffb347; }
+        /* Move/Resize tool row, rendered in the panel body: present only while
+           the sub-mode is on, so text-edit mode keeps its plain hint. */
+        .aimax-lay-tools { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
+        .aimax-lay-tools button {
+            min-width: 30px;
+            justify-content: center;
+            font-size: 13px;
+            line-height: 1;
+            background: #1a1a2e;
+            border: 1px solid rgba(255, 149, 0, 0.45);
+            color: #ffb347;
+            border-radius: 4px;
+            padding: 4px 10px;
+            font-size: 11px;
+            font-weight: 600;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+        }
+        .aimax-lay-tools button:hover:not(:disabled) { background: #2a2a3e; border-color: #ff9500; }
+        .aimax-lay-tools button:disabled { opacity: 0.35; cursor: not-allowed; }
+        .aimax-lay-tools .lay-key { opacity: 0.55; font-weight: 400; font-size: 10px; }
+        .aimax-lay-tools .lay-group { align-self: center; font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; opacity: 0.5; margin-right: 2px; }
+        /* Sub-mode toggles: one group per top-level mode, only the active
+           group is mounted, and exactly one button in it reads as selected. */
+        .submode-group { display: inline-flex; gap: 3px; padding: 2px; background: rgba(0,0,0,0.25); border-radius: 6px; }
+        .aimax-icon-btn.submode.on { background: rgba(0, 212, 255, 0.20); border-color: #00d4ff; color: #6fe3ff; }
+        .annot-window.edit-mode .aimax-icon-btn.submode.on { background: rgba(255, 149, 0, 0.22); border-color: #ff9500; color: #ffb347; }
+        /* Action row: what you DO with what you collected, kept out of the header. */
+        .annot-actions { padding: 8px 10px 0; }
+        .annot-actions:empty { display: none; }
+        .annot-act-row { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
         .annot-window {
             display: none;
             position: fixed;
@@ -1796,6 +2217,11 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
             display: flex;
             align-items: center;
             justify-content: center;
+            flex-shrink: 0;
+        }
+        .annot-draw-mark {
+            color: #ff2d92;
+            font-size: 11px;
             flex-shrink: 0;
         }
         .annot-text {
@@ -1900,44 +2326,67 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
             <span style="color: #00d4ff; font-size: 14px;">&gt;</span>
         </button>
         <button class="toolbar-btn" onclick="openClaudeCode()" title="New Claude Code conversation">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="#00d4ff" aria-hidden="true"><path d="M12 1.5 L13.6 9.2 L21.3 7.6 L15.7 12 L21.3 16.4 L13.6 14.8 L12 22.5 L10.4 14.8 L2.7 16.4 L8.3 12 L2.7 7.6 L10.4 9.2 Z"/></svg>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="#d97757" aria-hidden="true"><path d="M4.709 15.955l4.72-2.647.08-.23-.08-.128H9.2l-.79-.048-2.698-.073-2.339-.097-2.266-.122-.571-.121L0 11.784l.055-.352.48-.321.686.06 1.52.103 2.278.158 1.652.097 2.449.255h.389l.055-.157-.134-.098-.103-.097-2.358-1.596-2.552-1.688-1.336-.972-.724-.491-.364-.462-.158-1.008.656-.722.881.06.225.061.893.686 1.908 1.476 2.491 1.833.365.304.145-.103.019-.073-.164-.274-1.355-2.446-1.446-2.49-.644-1.032-.17-.619a2.97 2.97 0 01-.104-.729L6.283.134 6.696 0l.996.134.42.364.62 1.414 1.002 2.229 1.555 3.03.456.898.243.832.091.255h.158V9.01l.128-1.706.237-2.095.23-2.695.08-.76.376-.91.747-.492.584.28.48.685-.067.444-.286 1.851-.559 2.903-.364 1.942h.212l.243-.242.985-1.306 1.652-2.064.73-.82.85-.904.547-.431h1.033l.76 1.129-.34 1.166-1.064 1.347-.881 1.142-1.264 1.7-.79 1.36.073.11.188-.02 2.856-.606 1.543-.28 1.841-.315.833.388.091.395-.328.807-1.969.486-2.309.462-3.439.813-.042.03.049.061 1.549.146.662.036h1.622l3.02.225.79.522.474.638-.079.485-1.215.62-1.64-.389-3.829-.91-1.312-.329h-.182v.11l1.093 1.068 2.006 1.81 2.509 2.33.127.578-.322.455-.34-.049-2.205-1.657-.851-.747-1.926-1.62h-.128v.17l.444.649 2.345 3.521.122 1.08-.17.353-.608.213-.668-.122-1.374-1.925-1.415-2.167-1.143-1.943-.14.08-.674 7.254-.316.37-.729.28-.607-.461-.322-.747.322-1.476.389-1.924.315-1.53.286-1.9.17-.632-.012-.042-.14.018-1.434 1.967-2.18 2.945-1.726 1.845-.414.164-.717-.37.067-.662.401-.589 2.388-3.036 1.44-1.882.93-1.086-.006-.158h-.055L4.132 18.56l-1.13.146-.487-.456.061-.746.231-.243 1.908-1.312-.006.006z"/></svg>
         </button>
         <button class="menu-btn" onclick="toggleMenu()">☰</button>
     </div>
     <div class="annot-window" id="annotWindow">
+        <!-- Header carries ONLY the sub-modes of whatever mode is active, plus
+             Save and Close. Everything you *do* with what you collected lives in
+             the action row below, so the header answers one question: where am I. -->
         <div class="annot-header">
             <strong id="annotCount">Annotations (0)</strong>
-            <button class="aimax-icon-btn aimax-edit-only" id="notesBtn" onclick="toggleNotesMode()" style="display:none" title="Toggle speaker notes editing (reveal hidden .speaker-notes blocks)">
-                <span style="font-size:13px;line-height:1">&#128221;</span>
-            </button>
+            <span class="submode-group aimax-comment-only" id="annotSubmodes">
+                <button class="aimax-icon-btn submode" id="pointBtn" onclick="setAnnotSubmode('point')" title="Point mode — click an element to comment on it">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3l7 17 2-7 7-2z"/></svg>
+                </button>
+                <button class="aimax-icon-btn submode" id="drawSubBtn" onclick="setAnnotSubmode('draw')" title="Draw mode — freehand pencil to mark changes">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21c3-1 5-3 7-7"/><path d="M14.5 5.5l4 4"/><path d="M12 19l7-7a2.5 2.5 0 0 0-3.5-3.5l-7 7L7 19z"/></svg>
+                </button>
+            </span>
+            <span class="submode-group aimax-edit-only" id="editSubmodes" style="display:none">
+                <button class="aimax-icon-btn submode" id="textBtn" onclick="setEditSubmode('text')" title="Text mode — click any text and type over it">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7V5h16v2M9 19h6M12 5v14"/></svg>
+                </button>
+                <button class="aimax-icon-btn submode" id="layoutBtn" onclick="setEditSubmode('move')" title="Move/Resize mode — drag frames, drag handles to resize, arrows to nudge">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20M2 12h20M9 5l3-3 3 3M9 19l3 3 3-3M5 9l-3 3 3 3M19 9l3 3-3 3"/></svg>
+                </button>
+                <button class="aimax-icon-btn submode" id="notesBtn" onclick="setEditSubmode('notes')" title="Notes mode — reveal and edit hidden .speaker-notes blocks">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/><path d="M8 13h6M8 17h4"/></svg>
+                </button>
+            </span>
             <button class="aimax-icon-btn aimax-save-btn" id="saveBtn" onclick="triggerSave()" style="display:none" disabled title="Save pending edits to disk">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
                 <span class="save-text">Save</span>
                 <span class="label" id="saveCountLbl">0</span>
             </button>
-            <button class="aimax-icon-btn aimax-comment-only" onclick="copyAnnotPrompt()" title="Copy prompt">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-            </button>
-            <button class="aimax-icon-btn aimax-comment-only" onclick="annotSend('terminal')" title="Copy &amp; send to Terminal">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-                <span class="label">&gt;_</span>
-            </button>
-            <button class="aimax-icon-btn aimax-comment-only" onclick="annotSend('vscode')" title="Copy &amp; send to Claude Code">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-                <span class="label">&lt;/&gt;</span>
-            </button>
-            <button class="aimax-icon-btn aimax-comment-only" id="annotRunBtn" onclick="annotRun()" title="Run inline (Ask Claude)">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 1.5 L13.6 9.2 L21.3 7.6 L15.7 12 L21.3 16.4 L13.6 14.8 L12 22.5 L10.4 14.8 L2.7 16.4 L8.3 12 L2.7 7.6 L10.4 9.2 Z"/></svg>
-            </button>
-            <button class="aimax-icon-btn aimax-comment-only" onclick="annotRefresh()" title="Refresh page">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3.51-7.13"/><polyline points="21 4 21 10 15 10"/></svg>
-            </button>
-            <button class="aimax-icon-btn aimax-comment-only" onclick="clearAnnotations()" title="Clear all">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>
-            </button>
             <button class="aimax-icon-btn" onclick="closeAnnotPanel()" title="Close">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="6" y1="18" x2="18" y2="6"/></svg>
             </button>
+        </div>
+        <div class="annot-actions" id="annotActions">
+            <div class="annot-act-row aimax-comment-only">
+                <button class="aimax-icon-btn" onclick="copyAnnotPrompt()" title="Copy prompt">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                    <span class="label">Copy</span>
+                </button>
+                <button class="aimax-icon-btn" onclick="annotSend('terminal')" title="Copy &amp; send to Terminal">
+                    <span class="label">&gt;_</span>
+                </button>
+                <button class="aimax-icon-btn" onclick="annotSend('vscode')" title="Copy &amp; send to Claude Code">
+                    <span class="label">&lt;/&gt;</span>
+                </button>
+                <button class="aimax-icon-btn" id="annotRunBtn" onclick="annotRun()" title="Run inline (Ask Claude)">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 1.5 L13.6 9.2 L21.3 7.6 L15.7 12 L21.3 16.4 L13.6 14.8 L12 22.5 L10.4 14.8 L2.7 16.4 L8.3 12 L2.7 7.6 L10.4 9.2 Z"/></svg>
+                </button>
+                <button class="aimax-icon-btn" onclick="annotRefresh()" title="Refresh page">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3.51-7.13"/><polyline points="21 4 21 10 15 10"/></svg>
+                </button>
+                <button class="aimax-icon-btn" onclick="clearAnnotations()" title="Clear all">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>
+                </button>
+            </div>
+            <div id="annotLayoutTools"></div>
         </div>
         <div class="annot-body" id="annotBody"><div class="annot-empty">Hover an element and click to add a comment.</div></div>
         <div class="annot-response" id="annotResponse"></div>
@@ -1995,8 +2444,13 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
             <span id="liveInspectStatus">${liveInspectEnabled ? '✓' : '✗'}</span> Enable Live Annotation
         </button>
         <button class="menu-item" id="skipAnnotMenuItem" onclick="skipAnnotForHost()" disabled title="Available only on proxied (cross-port) pages">Skip Live Annotation for this host…</button>
+        <div class="menu-divider"></div>
+        <button class="menu-item" id="restoreLayoutItem" onclick="restoreLayout()" title="Put every element back where the page itself places it. Your text edits are kept.">Restore original layout</button>
+        <button class="menu-item" id="restoreBackupItem" onclick="restoreBackup()" title="Bring the whole file back to how it was before your first edit in this session. Text edits are undone too.">Restore file from backup</button>
+        <div class="menu-divider"></div>
+        <button class="menu-item" onclick="openDevTools()" title="Open the Developer Tools for this panel — console, DOM and network of the viewer itself">Show Dev Console</button>
     </div>
-    <iframe id="frame" src="${url}" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-top-navigation-by-user-activation allow-downloads" allow="clipboard-read; clipboard-write; fullscreen"></iframe>
+    <iframe id="frame" src="${cacheBustUrl(url)}" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-top-navigation-by-user-activation allow-downloads" allow="clipboard-read; clipboard-write; fullscreen"></iframe>
 
     <script>
         const vscode = acquireVsCodeApi();
@@ -2028,6 +2482,30 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
             }
         }
 
+        // Serving HTML with no-store stops NEW stale entries, but a page cached
+        // by an OLDER build (which sent etag/last-modified and no cache-control)
+        // can still be replayed from the webview's HTTP cache — bringing that
+        // build's injected annotation/edit client back with it, so the toolbar
+        // is new while the page behaves like the version it was cached under.
+        // A one-shot query param makes the cache key miss those legacy entries.
+        // currentUrl stays clean: address bar, history, presenter and the
+        // edit-target resolution all read it, and the server splits the query
+        // off before resolving the file.
+        function cacheBusted(url) {
+            try {
+                const u = new URL(url);
+                const local = u.hostname === '127.0.0.1' || u.hostname === 'localhost';
+                if (!local || u.port !== '${serverPort}') return url;
+                if (u.pathname.startsWith('/__proxy__/')
+                    || u.pathname.startsWith('/__presenter')
+                    || u.pathname.startsWith('/api/')) return url;
+                u.searchParams.set('__aimaxcb', String(Date.now()));
+                return u.toString();
+            } catch (e) {
+                return url;
+            }
+        }
+
         function navigateToUrl(url, addToHistory = true) {
             console.log('[AIMax Nav] navigateToUrl:', url, 'addToHistory:', addToHistory);
             console.log('[AIMax Nav] current history:', navHistory, 'index:', historyIndex);
@@ -2038,7 +2516,7 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
                 historyIndex = navHistory.length - 1;
                 console.log('[AIMax Nav] Added to history. New history:', navHistory, 'index:', historyIndex);
             }
-            frame.src = url;
+            frame.src = cacheBusted(url);
             currentUrl = url;
             updateUrlDisplay(url);
             updateNavButtons();
@@ -2135,7 +2613,9 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
         }
 
         function reload() {
-            frame.src = frame.src;
+            // Reassigning frame.src replays the cached response; reload from the
+            // canonical URL with a fresh cache-buster instead.
+            frame.src = cacheBusted(currentUrl);
             toggleMenu();
         }
 
@@ -2330,6 +2810,23 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
             vscode.postMessage({ command: 'openTerminal' });
         }
 
+        function openDevTools() {
+            vscode.postMessage({ command: 'openDevTools' });
+            toggleMenu();
+        }
+
+        // Both rewrite the file, so the host asks for confirmation before doing
+        // anything and tells us to reload once it has.
+        function restoreLayout() {
+            vscode.postMessage({ command: 'restoreLayout', url: currentUrl });
+            toggleMenu();
+        }
+
+        function restoreBackup() {
+            vscode.postMessage({ command: 'restoreBackup', url: currentUrl });
+            toggleMenu();
+        }
+
         function openClaudeCode() {
             vscode.postMessage({ command: 'openClaudeCode' });
         }
@@ -2468,9 +2965,19 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
         // Annotation mode state
         let annotActive = false;
         let editActive = false;
+        let drawActive = false;
         let notesActive = false;
+        let layoutActive = false;
+        // Undo/redo state mirrored from the page's gesture history, so the tool
+        // row can disable buttons that would do nothing. Declared up here with
+        // the other state: the init calls below reach annotEmptyMessage(), and a
+        // let declared further down would be in its temporal dead zone.
+        let layoutState = { canUndo: false, canRedo: false, hasSelection: false, hasChanges: false };
+        // How many .speaker-notes the page reports; null = not asked yet.
+        let notesCount = null;
         let annotations = [];
         let pendingEdits = []; // [{n, oldText, newText, selector, href}]
+        let pendingLayout = []; // [{n, selector, css}] — one entry per moved frame
         let editCounter = 0;
         const annotWindow = document.getElementById('annotWindow');
         const annotBody = document.getElementById('annotBody');
@@ -2478,6 +2985,7 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
         const annotBtn = document.getElementById('annotBtn');
         const editBtn = document.getElementById('editBtn');
         const notesBtn = document.getElementById('notesBtn');
+        const layoutBtn = document.getElementById('layoutBtn');
         const saveBtn = document.getElementById('saveBtn');
         const saveCountLbl = document.getElementById('saveCountLbl');
 
@@ -2497,37 +3005,54 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
         refreshAnnotEmptyMessage();
 
         function postFrameToggle() {
-            const on = annotActive || editActive;
-            const mode = editActive ? 'edit' : 'comment';
+            const on = annotActive || editActive || drawActive;
+            const mode = editActive ? 'edit' : (drawActive ? 'draw' : 'comment');
             try {
-                frame.contentWindow.postMessage({ type: 'annot:toggle', on: on, mode: mode, notes: notesActive }, '*');
+                frame.contentWindow.postMessage({ type: 'annot:toggle', on: on, mode: mode, notes: notesActive, layout: layoutActive }, '*');
             } catch (err) {}
         }
 
         function syncToggleUI() {
-            annotBtn.classList.toggle('active', annotActive);
+            // Draw is a sub-mode of annotation now, so the toolbar shows the two
+            // top-level modes and the panel header shows where you are inside one.
+            annotBtn.classList.toggle('active', annotActive || drawActive);
             editBtn.classList.toggle('active-edit', editActive);
-            const open = annotActive || editActive;
+            const open = annotActive || editActive || drawActive;
             annotWindow.classList.toggle('open', open);
             annotWindow.classList.toggle('edit-mode', editActive);
-            // Edit-only chrome
             document.querySelectorAll('.aimax-edit-only').forEach(el => {
                 el.style.display = editActive ? 'inline-flex' : 'none';
             });
-            notesBtn.classList.toggle('notes-active', notesActive);
+            // Comment-only chrome is hidden by the .edit-mode CSS rule, not by
+            // inline styles: the action row is a flex container and forcing
+            // inline-flex on it would break its layout.
+            const pointBtn = document.getElementById('pointBtn');
+            const drawSubBtn = document.getElementById('drawSubBtn');
+            const textBtn = document.getElementById('textBtn');
+            if (pointBtn) pointBtn.classList.toggle('on', annotActive && !drawActive);
+            if (drawSubBtn) drawSubBtn.classList.toggle('on', drawActive);
+            if (textBtn) textBtn.classList.toggle('on', editActive && !layoutActive && !notesActive);
+            notesBtn.classList.toggle('on', notesActive);
+            if (layoutBtn) layoutBtn.classList.toggle('on', layoutActive);
+            renderLayoutTools();
             updateSaveUI();
-            if (annotActive && !editActive) {
+            // Draw collects comments just like comment mode — same panel & list.
+            if ((annotActive || drawActive) && !editActive) {
                 annotCount.textContent = 'Annotations (' + annotations.length + ')';
             } else if (editActive) {
-                annotCount.textContent = notesActive ? 'Edit · Notes' : 'Edit';
+                annotCount.textContent = layoutActive
+                    ? 'Edit · Move/Resize'
+                    : (notesActive ? 'Edit · Notes' : 'Edit');
             }
-            if (annotations.length === 0) {
+            if (editActive) {
+                renderLayoutBody();
+            } else if (annotations.length === 0) {
                 refreshAnnotEmptyMessage();
             }
         }
 
         function updateSaveUI() {
-            const n = pendingEdits.length;
+            const n = pendingEdits.length + pendingLayout.length;
             saveCountLbl.textContent = String(n);
             saveBtn.disabled = (n === 0);
             // Save button is visible only inside Edit mode. If user closes the
@@ -2536,13 +3061,17 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
             saveBtn.style.display = editActive ? 'inline-flex' : 'none';
         }
 
+        // Annotate is the top-level mode; Point/Draw are its sub-modes, so the
+        // toolbar button restores whichever sub-mode was last used.
         function toggleAnnotMode(forceState) {
-            const next = (typeof forceState === 'boolean') ? forceState : !annotActive;
-            annotActive = next;
-            if (annotActive && editActive) {
-                // Mutually exclusive: turning Comment on disables Edit
-                editActive = false;
-                notesActive = false;
+            const wasOn = annotActive || drawActive;
+            const next = (typeof forceState === 'boolean') ? forceState : !wasOn;
+            if (next) {
+                if (editActive) { editActive = false; notesActive = false; layoutActive = false; }
+                if (!drawActive) annotActive = true;
+            } else {
+                annotActive = false;
+                drawActive = false;
             }
             syncToggleUI();
             postFrameToggle();
@@ -2552,20 +3081,92 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
             if (editBtn.disabled) return;
             const next = (typeof forceState === 'boolean') ? forceState : !editActive;
             editActive = next;
-            if (editActive && annotActive) {
+            if (editActive) {
                 annotActive = false;
+                drawActive = false;
+                // Always land in Text: it's the sub-mode that matches what the
+                // Edit button promises, and the other two are opt-in.
+                notesActive = false;
+                layoutActive = false;
             }
             if (!editActive) {
                 notesActive = false;
+                layoutActive = false;
             }
+            notesCount = null;
             syncToggleUI();
             postFrameToggle();
         }
 
-        function toggleNotesMode(forceState) {
+        // Kept for the keyboard/menu entry points that still name it.
+        function toggleDrawMode(forceState) {
+            const next = (typeof forceState === 'boolean') ? forceState : !drawActive;
+            setAnnotSubmode(next ? 'draw' : 'point');
+        }
+
+        function layoutToolsHtml() {
+            const u = layoutState.canUndo ? '' : ' disabled';
+            const r = layoutState.canRedo ? '' : ' disabled';
+            const s = layoutState.hasSelection ? '' : ' disabled';
+            // Enabled only when the selected frame actually carries an override
+            // (pending or already in the file) — otherwise the button offers to
+            // undo something that was never done.
+            const c = layoutState.hasChanges ? '' : ' disabled';
+            return '<div class="aimax-lay-tools">' +
+                '<button onclick="layoutUndo()"' + u + ' title="Undo the last move/resize  (⌘Z)">↶</button>' +
+                '<button onclick="layoutRedo()"' + r + ' title="Redo the last undone gesture  (⇧⌘Z)">↷</button>' +
+                '<button onclick="layoutDelete()"' + s + ' title="Hide the selected frame (display:none). The markup stays in the file — ⌘Z or Back to original brings it back"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg></button>' +
+                '<button onclick="layoutReset()"' + c + ' title="Back to original — drop every move/resize/reorder on the selected frame, including overrides already written to the file (removed on the next Save)">⤺</button>' +
+                '</div>' +
+                '<div class="aimax-lay-tools">' +
+                '<span class="lay-group">Order</span>' +
+                '<button onclick="layoutZ(\\'back\\')"' + s + ' title="Send to back — behind every sibling. Only visible where frames overlap">⤓</button>' +
+                '<button onclick="layoutZ(\\'backward\\')"' + s + ' title="Send backward one step">↓</button>' +
+                '<button onclick="layoutZ(\\'forward\\')"' + s + ' title="Bring forward one step">↑</button>' +
+                '<button onclick="layoutZ(\\'front\\')"' + s + ' title="Bring to front — above every sibling">⤒</button>' +
+                '</div>';
+        }
+
+        function postToFrame(msg) {
+            try { frame.contentWindow.postMessage(msg, '*'); } catch (err) {}
+        }
+
+        function layoutUndo() { postToFrame({ type: 'edit:layout-undo' }); }
+        function layoutRedo() { postToFrame({ type: 'edit:layout-redo' }); }
+        function layoutReset() { postToFrame({ type: 'edit:layout-reset' }); }
+        function layoutZ(dir) { postToFrame({ type: 'edit:layout-z', dir: dir }); }
+        function layoutDelete() { postToFrame({ type: 'edit:layout-delete' }); }
+
+        // The Move tool rows live in the action strip, alongside (never with)
+        // the comment actions — one mode's tools at a time.
+        function renderLayoutTools() {
+            const host = document.getElementById('annotLayoutTools');
+            if (!host) return;
+            host.innerHTML = (editActive && layoutActive) ? layoutToolsHtml() : '';
+        }
+
+        // The hint must show even when comments were collected earlier in the
+        // session (refreshAnnotEmptyMessage bails out in that case).
+        function renderLayoutBody() {
+            const body = document.getElementById('annotBody');
+            if (body) body.innerHTML = '<div class="annot-empty">' + annotEmptyMessage() + '</div>';
+        }
+
+        // One selected sub-mode at a time, always exactly one.
+        function setEditSubmode(which) {
             if (!editActive) return;
-            const next = (typeof forceState === 'boolean') ? forceState : !notesActive;
-            notesActive = next;
+            layoutActive = (which === 'move');
+            notesActive = (which === 'notes');
+            if (!layoutActive) layoutState = { canUndo: false, canRedo: false, hasSelection: false, hasChanges: false };
+            if (!notesActive) notesCount = null;
+            syncToggleUI();
+            postFrameToggle();
+        }
+
+        function setAnnotSubmode(which) {
+            drawActive = (which === 'draw');
+            annotActive = !drawActive;
+            editActive = false;
             syncToggleUI();
             postFrameToggle();
         }
@@ -2573,13 +3174,15 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
         function closeAnnotPanel() {
             annotActive = false;
             editActive = false;
+            drawActive = false;
             notesActive = false;
+            layoutActive = false;
             syncToggleUI();
             postFrameToggle();
         }
 
         function triggerSave() {
-            if (pendingEdits.length === 0) return;
+            if (pendingEdits.length === 0 && pendingLayout.length === 0) return;
             saveBtn.disabled = true;
             vscode.postMessage({
                 command: 'saveEdit',
@@ -2591,6 +3194,11 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
                     selector: e.selector,
                     occurrenceIndex: e.occurrenceIndex,
                     outerHTML: e.outerHTML
+                })),
+                layout: pendingLayout.map(l => ({
+                    n: l.n,
+                    selector: l.selector,
+                    css: l.css
                 }))
             });
         }
@@ -2605,6 +3213,7 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
                 try { frame.contentWindow.postMessage({ type: 'edit:result', n: f.n, ok: false, toast: f.reason }, '*'); } catch (e) {}
             });
             pendingEdits = pendingEdits.filter(e => !applied.includes(e.n));
+            pendingLayout = pendingLayout.filter(l => !applied.includes(l.n));
             updateSaveUI();
             const orig = annotCount.dataset.origText || annotCount.textContent;
             annotCount.dataset.origText = '';
@@ -2637,6 +3246,7 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
                 // URL navigated away from eligible — turn edit off but keep pending edits
                 editActive = false;
                 notesActive = false;
+                layoutActive = false;
                 syncToggleUI();
                 postFrameToggle();
             }
@@ -2651,13 +3261,25 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
             return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
         }
 
+        // Format the normalized stroke bbox as a human/agent-readable region line.
+        function annotRegionLine(a) {
+            if (a.kind !== 'draw' || !a.bbox) return '';
+            const pct = (v) => Math.round((v || 0) * 100) + '%';
+            const vp = a.viewport ? (' (viewport ' + a.viewport.w + 'x' + a.viewport.h + ')') : '';
+            return 'Region: freehand stroke bbox x=' + pct(a.bbox.x) + ' y=' + pct(a.bbox.y) +
+                ' w=' + pct(a.bbox.w) + ' h=' + pct(a.bbox.h) + vp;
+        }
+
         function annotEntryDetails(a) {
             const info = a.info || {};
             const dim = (info.width || 0) + 'x' + (info.height || 0);
             const meta = '<' + info.tag + '>' + (info.text ? ' "' + info.text + '"' : '') +
                 ' (' + dim + (info.color ? ', color ' + info.color : '') +
                 (info.font ? ', font ' + info.font : '') + ')';
-            return 'Selector: ' + a.selector + '\\nElement: ' + meta + '\\nRequest: ' + a.comment;
+            const region = annotRegionLine(a);
+            return (a.kind === 'draw' ? 'Gesture: freehand drawing\\n' : '') +
+                'Selector: ' + a.selector + '\\nElement: ' + meta +
+                (region ? '\\n' + region : '') + '\\nRequest: ' + a.comment;
         }
 
         function buildPromptText() {
@@ -2675,8 +3297,11 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
                     ' (' + dim + (info.color ? ', color ' + info.color : '') +
                     (info.font ? ', font ' + info.font : '') + ')';
                 lines.push('<annotation n="' + (i + 1) + '">');
+                if (a.kind === 'draw') lines.push('Gesture: freehand drawing (the user drew over this element to mark it)');
                 lines.push('Selector: ' + a.selector);
                 lines.push('Element: ' + meta);
+                const region = annotRegionLine(a);
+                if (region) lines.push(region);
                 lines.push('<request>' + a.comment + '</request>');
                 lines.push('</annotation>');
                 lines.push('');
@@ -2693,9 +3318,26 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
         // skip list — annotation can't work on that URL until that changes.
         function annotEmptyMessage() {
             if (editActive) {
-                return notesActive
-                    ? 'Hover a speaker note (yellow block) and click to edit. ⌘↵ to save the edit.'
-                    : 'Hover an element and click to edit its text. ↵ to save the edit.';
+                const tipL = 'opacity:0.7;font-size:0.9em';
+                if (layoutActive) {
+                    return 'Drag a frame to move it, drag a handle to resize, ↑↓←→ to nudge (⇧ = 10px). Esc deselects.' +
+                        '<br><br><span style="' + tipL + '">Saved as CSS overrides in a &lt;style data-aimax-layout&gt; block at the end of the file — the markup is untouched.</span>';
+                }
+                if (notesActive) {
+                    // notesCount is null until the page answers; 0 means the
+                    // artifact simply has no notes to edit.
+                    if (notesCount === 0) {
+                        return 'This artifact has no speaker notes.' +
+                            '<br><br><span style="' + tipL + '">Notes mode edits <code>.speaker-notes</code> blocks, which slide decks use for the presenter view. This file has none, so there is nothing to reveal here — switch back to Text to edit the visible content.</span>';
+                    }
+                    return 'Hover a speaker note (yellow block) and click to edit. ⌘↵ to save the edit.';
+                }
+                return 'Hover an element and click to edit its text. ↵ to save the edit.';
+            }
+            if (drawActive) {
+                const tip = 'opacity:0.7;font-size:0.9em';
+                return 'Draw freehand over the element to change, then type a note. ↵ to save.' +
+                    '<br><br><span style="' + tip + '">The stroke is anchored to the element underneath it — on long scrolling pages the position is approximate.</span>';
             }
             const base = 'Hover an element and click to add a comment.';
             const tipStyle = 'opacity:0.7;font-size:0.9em';
@@ -2743,8 +3385,12 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
             const rows = annotations.map((a, i) => {
                 const tag = (a.info && a.info.tag) ? a.info.tag : 'el';
                 const details = annotEntryDetails(a);
+                const drawMark = (a.kind === 'draw')
+                    ? '<span class="annot-draw-mark" title="Freehand drawing">✏</span>'
+                    : '';
                 return '<div class="annot-row" title="' + escapeHtml(details) + '">' +
                     '<span class="annot-num">' + (i + 1) + '</span>' +
+                    drawMark +
                     '<span class="annot-text">' + escapeHtml(a.comment) + '</span>' +
                     '<span class="annot-tag">&lt;' + escapeHtml(tag) + '&gt;</span>' +
                     '<span class="annot-x" data-n="' + a.n + '" title="Remove">×</span>' +
@@ -2950,11 +3596,38 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
                     notes: !!event.data.notes
                 });
                 updateSaveUI();
+            } else if (event.data?.type === 'edit:notes-state') {
+                notesCount = event.data.count | 0;
+                if (editActive && notesActive) renderLayoutBody();
+            } else if (event.data?.type === 'edit:layout-state') {
+                layoutState = {
+                    canUndo: !!event.data.canUndo,
+                    canRedo: !!event.data.canRedo,
+                    hasSelection: !!event.data.hasSelection,
+                    hasChanges: !!event.data.hasChanges
+                };
+                if (layoutActive) renderLayoutTools();
+            } else if (event.data?.type === 'edit:layout') {
+                // One entry per frame: re-dragging the same element replaces its
+                // pending geometry instead of queueing a second rule.
+                editCounter = Math.max(editCounter, event.data.n || 0);
+                const idx = pendingLayout.findIndex(l => l.selector === event.data.selector);
+                const entry = {
+                    n: event.data.n,
+                    selector: event.data.selector,
+                    css: event.data.css,
+                    href: event.data.href
+                };
+                if (idx >= 0) { pendingLayout[idx] = entry; } else { pendingLayout.push(entry); }
+                updateSaveUI();
             } else if (event.data?.type === 'edit:remove' && typeof event.data.n === 'number') {
                 pendingEdits = pendingEdits.filter(e => e.n !== event.data.n);
+                pendingLayout = pendingLayout.filter(l => l.n !== event.data.n);
                 updateSaveUI();
             } else if (event.data?.command === 'bridgeResult') {
                 aimaxBridgeOnResult(event.data);
+            } else if (event.data?.command === 'reloadFrame') {
+                reload();
             } else if (event.data?.command === 'saveEditResult') {
                 applySaveResult(event.data);
             } else if (event.data?.command === 'presentFile' && event.data.url) {
@@ -2970,28 +3643,14 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
         // Also inject Cmd/Ctrl+C handler so text selection inside iframe can be copied
         // (VS Code webview intercepts keyboard shortcuts; we forward selection to host)
         frame.addEventListener('load', () => {
-            if (annotActive || editActive) {
+            if (annotActive || editActive || drawActive) {
                 postFrameToggle();
             }
-            try {
-                const doc = frame.contentDocument;
-                if (doc) {
-                    doc.addEventListener('keydown', (e) => {
-                        if ((e.metaKey || e.ctrlKey) && (e.key === 'c' || e.key === 'C')) {
-                            const sel = doc.getSelection && doc.getSelection().toString();
-                            if (sel) {
-                                vscode.postMessage({ command: 'copyToClipboard', text: sel });
-                            }
-                        }
-                    });
-                    doc.addEventListener('copy', (e) => {
-                        const sel = doc.getSelection && doc.getSelection().toString();
-                        if (sel) {
-                            vscode.postMessage({ command: 'copyToClipboard', text: sel });
-                        }
-                    });
-                }
-            } catch (e) { /* cross-origin */ }
+            // No copy handler here on purpose: frame.contentDocument is always
+            // cross-origin (vscode-webview:// vs http://127.0.0.1), so this
+            // always threw and the handler was never installed. The injected
+            // client does it from inside the page and posts 'copyToClipboard'
+            // up to the listener below.
         });
 
         // Parent-level fallback: if user presses Cmd/Ctrl+C while iframe has selection,
@@ -3205,11 +3864,13 @@ function startHttpServer(workspaceFolder: string) {
                 let mode = 'terminal';
 
                 let allowEdits = false;
+                let readOnly = false;
                 try {
                     const parsed = JSON.parse(raw);
                     prompt = (parsed.prompt || '').trim();
                     mode = parsed.mode || 'terminal';
                     allowEdits = !!parsed.allowEdits;
+                    readOnly = !!parsed.readOnly;
                 } catch {
                     prompt = raw;
                 }
@@ -3220,7 +3881,7 @@ function startHttpServer(workspaceFolder: string) {
                     const status = result.ok ? 200 : (result.error === 'Empty prompt' ? 400 : (isTimeout ? 504 : 500));
                     res.writeHead(status, headers);
                     res.end(JSON.stringify(result));
-                }, { allowEdits });
+                }, { allowEdits, readOnly });
             });
             return;
         }
@@ -3644,11 +4305,18 @@ function openArtifactsHome(workspaceFolder: string, homePage: string = 'Artifact
                     vscode.env.openExternal(vscode.Uri.parse(url));
                 }
             } else if (message.command === 'navigateLocal') {
-                // Open local file in browser panel
-                const filePath = path.join(workspaceFolder, 'projects', message.path);
-                if (fs.existsSync(filePath)) {
+                // Relative links from the home page resolve against the WORKSPACE
+                // ROOT. They used to be looked up under a hardcoded 'projects/'
+                // folder — a leftover from an older layout — so a link to a file
+                // next to the index simply did nothing, with no error anywhere.
+                const rel = String(message.path || '').replace(/^\/+/, '');
+                const filePath = path.resolve(workspaceFolder, rel);
+                // The path comes from page content: keep it inside the workspace.
+                if (filePath.startsWith(workspaceFolder) && fs.existsSync(filePath)) {
                     const httpUrl = getHttpUrl(filePath, workspaceFolder);
                     openInBrowser(httpUrl);
+                } else {
+                    vscode.window.showWarningMessage('AIMax: link not found in this workspace — ' + rel);
                 }
             } else if (message.command === 'openTerminal') {
                 vscode.commands.executeCommand('workbench.action.terminal.new');
@@ -3697,7 +4365,10 @@ function wrapWithToolbarAndLinkHandler(html: string, title: string, faviconUri: 
             top: 0;
             left: 0;
             right: 0;
-            z-index: 100000;
+            /* Home Panel shares one document with the artifact AND with the
+               injected client, so the chrome claims the top of the stacking
+               band (the client keeps 2147483646 and below). */
+            z-index: 2147483647;
         }
         .aimax-brand-icon {
             height: 22px;
@@ -3761,6 +4432,16 @@ function wrapWithToolbarAndLinkHandler(html: string, title: string, faviconUri: 
             border-color: #ff9500;
             background: rgba(255, 149, 0, 0.14);
         }
+        .aimax-toolbar-btn.active-draw {
+            color: #ff2d92;
+            border-color: #ff2d92;
+            background: rgba(255, 45, 146, 0.14);
+        }
+        .aimax-annot-draw-mark {
+            color: #ff2d92;
+            font-size: 11px;
+            flex-shrink: 0;
+        }
         .aimax-toolbar-btn:disabled {
             opacity: 0.35;
             cursor: not-allowed;
@@ -3772,6 +4453,40 @@ function wrapWithToolbarAndLinkHandler(html: string, title: string, faviconUri: 
         .aimax-icon-btn.aimax-save-btn:not(:disabled):hover { background: rgba(52, 199, 89, 0.15); }
         .aimax-icon-btn.aimax-save-btn .save-text { font-size: 11px; font-weight: 600; letter-spacing: 0.3px; }
         .aimax-icon-btn.notes-active { background: rgba(181, 137, 0, 0.20); border-color: #b58900; color: #ffcc44; }
+        .aimax-icon-btn.layout-active { background: rgba(255, 149, 0, 0.22); border-color: #ff9500; color: #ffb347; }
+        /* Move/Resize tool row, rendered in the panel body: present only while
+           the sub-mode is on, so text-edit mode keeps its plain hint. */
+        .aimax-lay-tools { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
+        .aimax-lay-tools button {
+            min-width: 30px;
+            justify-content: center;
+            font-size: 13px;
+            line-height: 1;
+            background: #1a1a2e;
+            border: 1px solid rgba(255, 149, 0, 0.45);
+            color: #ffb347;
+            border-radius: 4px;
+            padding: 4px 10px;
+            font-size: 11px;
+            font-weight: 600;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+        }
+        .aimax-lay-tools button:hover:not(:disabled) { background: #2a2a3e; border-color: #ff9500; }
+        .aimax-lay-tools button:disabled { opacity: 0.35; cursor: not-allowed; }
+        .aimax-lay-tools .lay-key { opacity: 0.55; font-weight: 400; font-size: 10px; }
+        .aimax-lay-tools .lay-group { align-self: center; font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; opacity: 0.5; margin-right: 2px; }
+        /* Sub-mode toggles: one group per top-level mode, only the active
+           group is mounted, and exactly one button in it reads as selected. */
+        .submode-group { display: inline-flex; gap: 3px; padding: 2px; background: rgba(0,0,0,0.25); border-radius: 6px; }
+        .aimax-icon-btn.submode.on { background: rgba(0, 212, 255, 0.20); border-color: #00d4ff; color: #6fe3ff; }
+        .annot-window.edit-mode .aimax-icon-btn.submode.on { background: rgba(255, 149, 0, 0.22); border-color: #ff9500; color: #ffb347; }
+        /* Action row: what you DO with what you collected, kept out of the header. */
+        .annot-actions { padding: 8px 10px 0; }
+        .annot-actions:empty { display: none; }
+        .annot-act-row { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
         .aimax-content-wrapper {
             padding-top: 44px;
         }
@@ -3786,7 +4501,8 @@ function wrapWithToolbarAndLinkHandler(html: string, title: string, faviconUri: 
             border: 1px solid #00d4ff;
             border-radius: 8px;
             box-shadow: 0 8px 24px rgba(0,0,0,0.5);
-            z-index: 100002;
+            /* Same reason as .aimax-toolbar: single document, chrome on top. */
+            z-index: 2147483647;
             flex-direction: column;
             overflow: hidden;
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
@@ -3932,43 +4648,63 @@ function wrapWithToolbarAndLinkHandler(html: string, title: string, faviconUri: 
             <span style="font-family: monospace; font-weight: bold;">&gt;_</span>
         </button>
         <button class="aimax-toolbar-btn" onclick="openClaudeCode()" title="New Claude Code conversation">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="#00d4ff" aria-hidden="true"><path d="M12 1.5 L13.6 9.2 L21.3 7.6 L15.7 12 L21.3 16.4 L13.6 14.8 L12 22.5 L10.4 14.8 L2.7 16.4 L8.3 12 L2.7 7.6 L10.4 9.2 Z"/></svg>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="#d97757" aria-hidden="true"><path d="M4.709 15.955l4.72-2.647.08-.23-.08-.128H9.2l-.79-.048-2.698-.073-2.339-.097-2.266-.122-.571-.121L0 11.784l.055-.352.48-.321.686.06 1.52.103 2.278.158 1.652.097 2.449.255h.389l.055-.157-.134-.098-.103-.097-2.358-1.596-2.552-1.688-1.336-.972-.724-.491-.364-.462-.158-1.008.656-.722.881.06.225.061.893.686 1.908 1.476 2.491 1.833.365.304.145-.103.019-.073-.164-.274-1.355-2.446-1.446-2.49-.644-1.032-.17-.619a2.97 2.97 0 01-.104-.729L6.283.134 6.696 0l.996.134.42.364.62 1.414 1.002 2.229 1.555 3.03.456.898.243.832.091.255h.158V9.01l.128-1.706.237-2.095.23-2.695.08-.76.376-.91.747-.492.584.28.48.685-.067.444-.286 1.851-.559 2.903-.364 1.942h.212l.243-.242.985-1.306 1.652-2.064.73-.82.85-.904.547-.431h1.033l.76 1.129-.34 1.166-1.064 1.347-.881 1.142-1.264 1.7-.79 1.36.073.11.188-.02 2.856-.606 1.543-.28 1.841-.315.833.388.091.395-.328.807-1.969.486-2.309.462-3.439.813-.042.03.049.061 1.549.146.662.036h1.622l3.02.225.79.522.474.638-.079.485-1.215.62-1.64-.389-3.829-.91-1.312-.329h-.182v.11l1.093 1.068 2.006 1.81 2.509 2.33.127.578-.322.455-.34-.049-2.205-1.657-.851-.747-1.926-1.62h-.128v.17l.444.649 2.345 3.521.122 1.08-.17.353-.608.213-.668-.122-1.374-1.925-1.415-2.167-1.143-1.943-.14.08-.674 7.254-.316.37-.729.28-.607-.461-.322-.747.322-1.476.389-1.924.315-1.53.286-1.9.17-.632-.012-.042-.14.018-1.434 1.967-2.18 2.945-1.726 1.845-.414.164-.717-.37.067-.662.401-.589 2.388-3.036 1.44-1.882.93-1.086-.006-.158h-.055L4.132 18.56l-1.13.146-.487-.456.061-.746.231-.243 1.908-1.312-.006.006z"/></svg>
         </button>
     </div>
     <div class="aimax-annot-window" id="aimaxAnnotWindow" data-aimax-overlay="1">
         <div class="aimax-annot-header">
             <strong id="aimaxAnnotCount">Annotations (0)</strong>
-            <button class="aimax-icon-btn aimax-edit-only" id="aimaxNotesBtn" onclick="aimaxToggleNotes()" style="display:none" title="Toggle speaker notes editing (reveal hidden .speaker-notes blocks)">
-                <span style="font-size:13px;line-height:1">&#128221;</span>
-            </button>
+            <span class="submode-group aimax-comment-only" id="aimaxAnnotSubmodes">
+                <button class="aimax-icon-btn submode" id="aimaxPointBtn" onclick="aimaxSetAnnotSubmode('point')" title="Point mode — click an element to comment on it">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3l7 17 2-7 7-2z"/></svg>
+                </button>
+                <button class="aimax-icon-btn submode" id="aimaxDrawSubBtn" onclick="aimaxSetAnnotSubmode('draw')" title="Draw mode — freehand pencil to mark changes">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21c3-1 5-3 7-7"/><path d="M14.5 5.5l4 4"/><path d="M12 19l7-7a2.5 2.5 0 0 0-3.5-3.5l-7 7L7 19z"/></svg>
+                </button>
+            </span>
+            <span class="submode-group aimax-edit-only" id="aimaxEditSubmodes" style="display:none">
+                <button class="aimax-icon-btn submode" id="aimaxTextBtn" onclick="aimaxSetEditSubmode('text')" title="Text mode — click any text and type over it">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7V5h16v2M9 19h6M12 5v14"/></svg>
+                </button>
+                <button class="aimax-icon-btn submode" id="aimaxLayoutBtn" onclick="aimaxSetEditSubmode('move')" title="Move/Resize mode — drag frames, drag handles to resize, arrows to nudge">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20M2 12h20M9 5l3-3 3 3M9 19l3 3 3-3M5 9l-3 3 3 3M19 9l3 3-3 3"/></svg>
+                </button>
+                <button class="aimax-icon-btn submode" id="aimaxNotesBtn" onclick="aimaxSetEditSubmode('notes')" title="Notes mode — reveal and edit hidden .speaker-notes blocks">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/><path d="M8 13h6M8 17h4"/></svg>
+                </button>
+            </span>
             <button class="aimax-icon-btn aimax-save-btn" id="aimaxSaveBtn" onclick="aimaxTriggerSave()" style="display:none" disabled title="Save pending edits to disk">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
                 <span class="save-text">Save</span>
                 <span class="label" id="aimaxSaveCountLbl">0</span>
             </button>
-            <button class="aimax-icon-btn aimax-comment-only" onclick="aimaxCopyAnnotPrompt()" title="Copy prompt">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-            </button>
-            <button class="aimax-icon-btn aimax-comment-only" onclick="aimaxAnnotSend('terminal')" title="Copy &amp; send to Terminal">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-                <span class="label">&gt;_</span>
-            </button>
-            <button class="aimax-icon-btn aimax-comment-only" onclick="aimaxAnnotSend('vscode')" title="Copy &amp; send to Claude Code">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-                <span class="label">&lt;/&gt;</span>
-            </button>
-            <button class="aimax-icon-btn aimax-comment-only" id="aimaxAnnotRunBtn" onclick="aimaxAnnotRun()" title="Run inline (Ask Claude)">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 1.5 L13.6 9.2 L21.3 7.6 L15.7 12 L21.3 16.4 L13.6 14.8 L12 22.5 L10.4 14.8 L2.7 16.4 L8.3 12 L2.7 7.6 L10.4 9.2 Z"/></svg>
-            </button>
-            <button class="aimax-icon-btn aimax-comment-only" onclick="aimaxAnnotRefresh()" title="Refresh page">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3.51-7.13"/><polyline points="21 4 21 10 15 10"/></svg>
-            </button>
-            <button class="aimax-icon-btn aimax-comment-only" onclick="aimaxClearAnnot()" title="Clear all">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>
-            </button>
             <button class="aimax-icon-btn" onclick="aimaxCloseAnnotPanel()" title="Close">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="6" y1="18" x2="18" y2="6"/></svg>
             </button>
+        </div>
+        <div class="annot-actions" id="aimaxAnnotActions">
+            <div class="annot-act-row aimax-comment-only">
+                <button class="aimax-icon-btn" onclick="aimaxCopyAnnotPrompt()" title="Copy prompt">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                    <span class="label">Copy</span>
+                </button>
+                <button class="aimax-icon-btn" onclick="aimaxAnnotSend('terminal')" title="Copy &amp; send to Terminal">
+                    <span class="label">&gt;_</span>
+                </button>
+                <button class="aimax-icon-btn" onclick="aimaxAnnotSend('vscode')" title="Copy &amp; send to Claude Code">
+                    <span class="label">&lt;/&gt;</span>
+                </button>
+                <button class="aimax-icon-btn" id="aimaxAnnotRunBtn" onclick="aimaxAnnotRun()" title="Run inline (Ask Claude)">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 1.5 L13.6 9.2 L21.3 7.6 L15.7 12 L21.3 16.4 L13.6 14.8 L12 22.5 L10.4 14.8 L2.7 16.4 L8.3 12 L2.7 7.6 L10.4 9.2 Z"/></svg>
+                </button>
+                <button class="aimax-icon-btn" onclick="aimaxAnnotRefresh()" title="Refresh page">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3.51-7.13"/><polyline points="21 4 21 10 15 10"/></svg>
+                </button>
+                <button class="aimax-icon-btn" onclick="aimaxClearAnnot()" title="Clear all">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>
+                </button>
+            </div>
+            <div id="aimaxLayoutTools"></div>
         </div>
         <div class="aimax-annot-body" id="aimaxAnnotBody"><div class="aimax-annot-empty">Hover an element and click to add a comment.</div></div>
         <div class="aimax-annot-response" id="aimaxAnnotResponse"></div>
@@ -4032,39 +4768,57 @@ function wrapWithToolbarAndLinkHandler(html: string, title: string, faviconUri: 
         // Annotation mode (Home Panel: same-document, no iframe)
         let aimaxAnnotActive = false;
         let aimaxEditActive = false;
+        let aimaxDrawActive = false;
         let aimaxNotesActive = false;
+        let aimaxLayoutActive = false;
+        // Undo/redo state mirrored from the injected client (same document here).
+        let aimaxLayoutState = { canUndo: false, canRedo: false, hasSelection: false, hasChanges: false };
+        // Quante .speaker-notes riporta la pagina; null = non ancora chiesto.
+        let aimaxNotesCount = null;
         let aimaxAnnotations = [];
         let aimaxPendingEdits = [];
+        let aimaxPendingLayout = []; // [{n, selector, css}] — one entry per moved frame
         const aimaxAnnotWindow = document.getElementById('aimaxAnnotWindow');
         const aimaxAnnotBody = document.getElementById('aimaxAnnotBody');
         const aimaxAnnotCount = document.getElementById('aimaxAnnotCount');
         const aimaxAnnotBtn = document.getElementById('aimaxAnnotBtn');
         const aimaxEditBtn = document.getElementById('aimaxEditBtn');
         const aimaxNotesBtn = document.getElementById('aimaxNotesBtn');
+        const aimaxLayoutBtn = document.getElementById('aimaxLayoutBtn');
         const aimaxSaveBtn = document.getElementById('aimaxSaveBtn');
         const aimaxSaveCountLbl = document.getElementById('aimaxSaveCountLbl');
 
         function aimaxPostToggle() {
-            const on = aimaxAnnotActive || aimaxEditActive;
-            const mode = aimaxEditActive ? 'edit' : 'comment';
-            window.postMessage({ type: 'annot:toggle', on: on, mode: mode, notes: aimaxNotesActive }, '*');
+            const on = aimaxAnnotActive || aimaxEditActive || aimaxDrawActive;
+            const mode = aimaxEditActive ? 'edit' : (aimaxDrawActive ? 'draw' : 'comment');
+            window.postMessage({ type: 'annot:toggle', on: on, mode: mode, notes: aimaxNotesActive, layout: aimaxLayoutActive }, '*');
         }
 
         function aimaxSyncToggleUI() {
-            aimaxAnnotBtn.classList.toggle('active', aimaxAnnotActive);
+            aimaxAnnotBtn.classList.toggle('active', aimaxAnnotActive || aimaxDrawActive);
             aimaxEditBtn.classList.toggle('active-edit', aimaxEditActive);
-            const open = aimaxAnnotActive || aimaxEditActive;
+            const open = aimaxAnnotActive || aimaxEditActive || aimaxDrawActive;
             aimaxAnnotWindow.classList.toggle('open', open);
             aimaxAnnotWindow.classList.toggle('edit-mode', aimaxEditActive);
             document.querySelectorAll('.aimax-edit-only').forEach(el => {
                 el.style.display = aimaxEditActive ? 'inline-flex' : 'none';
             });
-            aimaxNotesBtn.classList.toggle('notes-active', aimaxNotesActive);
+            const pb = document.getElementById('aimaxPointBtn');
+            const db = document.getElementById('aimaxDrawSubBtn');
+            const tb = document.getElementById('aimaxTextBtn');
+            if (pb) pb.classList.toggle('on', aimaxAnnotActive && !aimaxDrawActive);
+            if (db) db.classList.toggle('on', aimaxDrawActive);
+            if (tb) tb.classList.toggle('on', aimaxEditActive && !aimaxLayoutActive && !aimaxNotesActive);
+            aimaxNotesBtn.classList.toggle('on', aimaxNotesActive);
+            if (aimaxLayoutBtn) aimaxLayoutBtn.classList.toggle('on', aimaxLayoutActive);
+            aimaxRenderLayoutTools();
             aimaxUpdateSaveUI();
-            if (aimaxAnnotActive && !aimaxEditActive) {
+            if ((aimaxAnnotActive || aimaxDrawActive) && !aimaxEditActive) {
                 aimaxAnnotCount.textContent = 'Annotations (' + aimaxAnnotations.length + ')';
             } else if (aimaxEditActive) {
-                aimaxAnnotCount.textContent = aimaxNotesActive ? 'Edit · Notes' : 'Edit';
+                aimaxAnnotCount.textContent = aimaxLayoutActive
+                    ? 'Edit · Move/Resize'
+                    : (aimaxNotesActive ? 'Edit · Notes' : 'Edit');
             }
             if (aimaxAnnotations.length === 0) {
                 aimaxRenderAnnot();
@@ -4072,18 +4826,22 @@ function wrapWithToolbarAndLinkHandler(html: string, title: string, faviconUri: 
         }
 
         function aimaxUpdateSaveUI() {
-            const n = aimaxPendingEdits.length;
+            const n = aimaxPendingEdits.length + aimaxPendingLayout.length;
             aimaxSaveCountLbl.textContent = String(n);
             aimaxSaveBtn.disabled = (n === 0);
             aimaxSaveBtn.style.display = aimaxEditActive ? 'inline-flex' : 'none';
         }
 
+        // Annotate is the top-level mode; Point/Draw are its sub-modes.
         function aimaxToggleAnnot(forceState) {
-            const next = (typeof forceState === 'boolean') ? forceState : !aimaxAnnotActive;
-            aimaxAnnotActive = next;
-            if (aimaxAnnotActive && aimaxEditActive) {
-                aimaxEditActive = false;
-                aimaxNotesActive = false;
+            const wasOn = aimaxAnnotActive || aimaxDrawActive;
+            const next = (typeof forceState === 'boolean') ? forceState : !wasOn;
+            if (next) {
+                if (aimaxEditActive) { aimaxEditActive = false; aimaxNotesActive = false; aimaxLayoutActive = false; }
+                if (!aimaxDrawActive) aimaxAnnotActive = true;
+            } else {
+                aimaxAnnotActive = false;
+                aimaxDrawActive = false;
             }
             aimaxSyncToggleUI();
             aimaxPostToggle();
@@ -4093,34 +4851,85 @@ function wrapWithToolbarAndLinkHandler(html: string, title: string, faviconUri: 
             if (aimaxEditBtn.disabled) return;
             const next = (typeof forceState === 'boolean') ? forceState : !aimaxEditActive;
             aimaxEditActive = next;
-            if (aimaxEditActive && aimaxAnnotActive) {
+            if (aimaxEditActive) {
                 aimaxAnnotActive = false;
+                aimaxDrawActive = false;
             }
-            if (!aimaxEditActive) {
-                aimaxNotesActive = false;
-            }
+            // Entering or leaving Edit always lands on Text.
+            aimaxNotesActive = false;
+            aimaxLayoutActive = false;
+            aimaxNotesCount = null;
             aimaxSyncToggleUI();
             aimaxPostToggle();
         }
 
-        function aimaxToggleNotes(forceState) {
-            if (!aimaxEditActive) return;
-            const next = (typeof forceState === 'boolean') ? forceState : !aimaxNotesActive;
-            aimaxNotesActive = next;
+        function aimaxToggleDraw(forceState) {
+            const next = (typeof forceState === 'boolean') ? forceState : !aimaxDrawActive;
+            aimaxSetAnnotSubmode(next ? 'draw' : 'point');
+        }
+
+        function aimaxSetAnnotSubmode(which) {
+            aimaxDrawActive = (which === 'draw');
+            aimaxAnnotActive = !aimaxDrawActive;
+            aimaxEditActive = false;
             aimaxSyncToggleUI();
             aimaxPostToggle();
         }
+
+        function aimaxSetEditSubmode(which) {
+            if (!aimaxEditActive) return;
+            aimaxLayoutActive = (which === 'move');
+            aimaxNotesActive = (which === 'notes');
+            if (!aimaxLayoutActive) aimaxLayoutState = { canUndo: false, canRedo: false, hasSelection: false, hasChanges: false };
+            if (!aimaxNotesActive) aimaxNotesCount = null;
+            aimaxSyncToggleUI();
+            aimaxPostToggle();
+        }
+
+        function aimaxRenderLayoutTools() {
+            const host = document.getElementById('aimaxLayoutTools');
+            if (!host) return;
+            host.innerHTML = (aimaxEditActive && aimaxLayoutActive) ? aimaxLayoutToolsHtml() : '';
+        }
+
+        function aimaxLayoutToolsHtml() {
+            const u = aimaxLayoutState.canUndo ? '' : ' disabled';
+            const r = aimaxLayoutState.canRedo ? '' : ' disabled';
+            const s = aimaxLayoutState.hasSelection ? '' : ' disabled';
+            const c = aimaxLayoutState.hasChanges ? '' : ' disabled';
+            return '<div class="aimax-lay-tools">' +
+                '<button onclick="aimaxLayoutUndo()"' + u + ' title="Undo the last move/resize  (⌘Z)">↶</button>' +
+                '<button onclick="aimaxLayoutRedo()"' + r + ' title="Redo the last undone gesture  (⇧⌘Z)">↷</button>' +
+                '<button onclick="aimaxLayoutDelete()"' + s + ' title="Hide the selected frame (display:none). The markup stays in the file — ⌘Z or Back to original brings it back"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg></button>' +
+                '<button onclick="aimaxLayoutReset()"' + c + ' title="Back to original — drop every move/resize/reorder on the selected frame, including overrides already written to the file (removed on the next Save)">⤺</button>' +
+                '</div>' +
+                '<div class="aimax-lay-tools">' +
+                '<span class="lay-group">Order</span>' +
+                '<button onclick="aimaxLayoutZ(\\'back\\')"' + s + ' title="Send to back — behind every sibling. Only visible where frames overlap">⤓</button>' +
+                '<button onclick="aimaxLayoutZ(\\'backward\\')"' + s + ' title="Send backward one step">↓</button>' +
+                '<button onclick="aimaxLayoutZ(\\'forward\\')"' + s + ' title="Bring forward one step">↑</button>' +
+                '<button onclick="aimaxLayoutZ(\\'front\\')"' + s + ' title="Bring to front — above every sibling">⤒</button>' +
+                '</div>';
+        }
+
+        function aimaxLayoutUndo() { window.postMessage({ type: 'edit:layout-undo' }, '*'); }
+        function aimaxLayoutRedo() { window.postMessage({ type: 'edit:layout-redo' }, '*'); }
+        function aimaxLayoutReset() { window.postMessage({ type: 'edit:layout-reset' }, '*'); }
+        function aimaxLayoutZ(dir) { window.postMessage({ type: 'edit:layout-z', dir: dir }, '*'); }
+        function aimaxLayoutDelete() { window.postMessage({ type: 'edit:layout-delete' }, '*'); }
 
         function aimaxCloseAnnotPanel() {
             aimaxAnnotActive = false;
             aimaxEditActive = false;
+            aimaxDrawActive = false;
             aimaxNotesActive = false;
+            aimaxLayoutActive = false;
             aimaxSyncToggleUI();
             aimaxPostToggle();
         }
 
         function aimaxTriggerSave() {
-            if (aimaxPendingEdits.length === 0) return;
+            if (aimaxPendingEdits.length === 0 && aimaxPendingLayout.length === 0) return;
             aimaxSaveBtn.disabled = true;
             vscode.postMessage({
                 command: 'saveEdit',
@@ -4132,6 +4941,11 @@ function wrapWithToolbarAndLinkHandler(html: string, title: string, faviconUri: 
                     selector: e.selector,
                     occurrenceIndex: e.occurrenceIndex,
                     outerHTML: e.outerHTML
+                })),
+                layout: aimaxPendingLayout.map(l => ({
+                    n: l.n,
+                    selector: l.selector,
+                    css: l.css
                 }))
             });
         }
@@ -4146,6 +4960,7 @@ function wrapWithToolbarAndLinkHandler(html: string, title: string, faviconUri: 
                 window.postMessage({ type: 'edit:result', n: f.n, ok: false, toast: f.reason }, '*');
             });
             aimaxPendingEdits = aimaxPendingEdits.filter(e => !applied.includes(e.n));
+            aimaxPendingLayout = aimaxPendingLayout.filter(l => !applied.includes(l.n));
             aimaxUpdateSaveUI();
             const txt = (failed.length === 0)
                 ? ('✓ ' + applied.length + ' saved')
@@ -4167,13 +4982,24 @@ function wrapWithToolbarAndLinkHandler(html: string, title: string, faviconUri: 
             return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
         }
 
+        function aimaxRegionLine(a) {
+            if (a.kind !== 'draw' || !a.bbox) return '';
+            const pct = (v) => Math.round((v || 0) * 100) + '%';
+            const vp = a.viewport ? (' (viewport ' + a.viewport.w + 'x' + a.viewport.h + ')') : '';
+            return 'Region: freehand stroke bbox x=' + pct(a.bbox.x) + ' y=' + pct(a.bbox.y) +
+                ' w=' + pct(a.bbox.w) + ' h=' + pct(a.bbox.h) + vp;
+        }
+
         function aimaxEntryDetails(a) {
             const info = a.info || {};
             const dim = (info.width || 0) + 'x' + (info.height || 0);
             const meta = '<' + info.tag + '>' + (info.text ? ' "' + info.text + '"' : '') +
                 ' (' + dim + (info.color ? ', color ' + info.color : '') +
                 (info.font ? ', font ' + info.font : '') + ')';
-            return 'Selector: ' + a.selector + '\\nElement: ' + meta + '\\nRequest: ' + a.comment;
+            const region = aimaxRegionLine(a);
+            return (a.kind === 'draw' ? 'Gesture: freehand drawing\\n' : '') +
+                'Selector: ' + a.selector + '\\nElement: ' + meta +
+                (region ? '\\n' + region : '') + '\\nRequest: ' + a.comment;
         }
 
         function aimaxBuildPrompt() {
@@ -4191,8 +5017,11 @@ function wrapWithToolbarAndLinkHandler(html: string, title: string, faviconUri: 
                     ' (' + dim + (info.color ? ', color ' + info.color : '') +
                     (info.font ? ', font ' + info.font : '') + ')';
                 lines.push('<annotation n="' + (i + 1) + '">');
+                if (a.kind === 'draw') lines.push('Gesture: freehand drawing (the user drew over this element to mark it)');
                 lines.push('Selector: ' + a.selector);
                 lines.push('Element: ' + meta);
+                const region = aimaxRegionLine(a);
+                if (region) lines.push(region);
                 lines.push('<request>' + a.comment + '</request>');
                 lines.push('</annotation>');
                 lines.push('');
@@ -4204,20 +5033,40 @@ function wrapWithToolbarAndLinkHandler(html: string, title: string, faviconUri: 
             if (!aimaxEditActive) {
                 aimaxAnnotCount.textContent = 'Annotations (' + aimaxAnnotations.length + ')';
             }
+            // Edit owns the body: its hint must show even if comments were
+            // collected earlier in the session. The tools live in the action row.
+            if (aimaxEditActive) {
+                let msg;
+                if (aimaxLayoutActive) {
+                    msg = 'Drag a frame to move it, drag a handle to resize, ↑↓←→ to nudge (⇧ = 10px). Esc deselects.';
+                } else if (aimaxNotesActive) {
+                    msg = (aimaxNotesCount === 0)
+                        ? 'This artifact has no speaker notes — nothing to reveal here. Switch back to Text to edit the visible content.'
+                        : 'Hover a speaker note (yellow block) and click to edit. ⌘↵ to save the edit.';
+                } else {
+                    msg = 'Hover an element and click to edit its text. ↵ to save the edit.';
+                }
+                aimaxAnnotBody.innerHTML = '<div class="aimax-annot-empty">' + msg + '</div>';
+                return;
+            }
             if (aimaxAnnotations.length === 0) {
                 const msg = aimaxEditActive
-                    ? (aimaxNotesActive
-                        ? 'Hover a speaker note (yellow block) and click to edit. ⌘↵ to save the edit.'
-                        : 'Hover an element and click to edit its text. ↵ to save the edit.')
-                    : 'Hover an element and click to add a comment.';
+                    ? 'Hover an element and click to edit its text. ↵ to save the edit.'
+                    : (aimaxDrawActive
+                        ? 'Draw freehand over the element to change, then type a note. ↵ to save.'
+                        : 'Hover an element and click to add a comment.');
                 aimaxAnnotBody.innerHTML = '<div class="aimax-annot-empty">' + msg + '</div>';
                 return;
             }
             const rows = aimaxAnnotations.map((a, i) => {
                 const tag = (a.info && a.info.tag) ? a.info.tag : 'el';
                 const details = aimaxEntryDetails(a);
+                const drawMark = (a.kind === 'draw')
+                    ? '<span class="aimax-annot-draw-mark" title="Freehand drawing">✏</span>'
+                    : '';
                 return '<div class="aimax-annot-row" title="' + aimaxEsc(details) + '">' +
                     '<span class="aimax-annot-num">' + (i + 1) + '</span>' +
+                    drawMark +
                     '<span class="aimax-annot-text">' + aimaxEsc(a.comment) + '</span>' +
                     '<span class="aimax-annot-tag">&lt;' + aimaxEsc(tag) + '&gt;</span>' +
                     '<span class="aimax-annot-x" data-n="' + a.n + '" title="Remove">×</span>' +
@@ -4325,9 +5174,36 @@ function wrapWithToolbarAndLinkHandler(html: string, title: string, faviconUri: 
                     notes: !!event.data.notes
                 });
                 aimaxUpdateSaveUI();
+            } else if (event.data?.type === 'edit:notes-state') {
+                aimaxNotesCount = event.data.count | 0;
+                if (aimaxEditActive && aimaxNotesActive) aimaxRenderAnnot();
+            } else if (event.data?.type === 'edit:layout-state') {
+                aimaxLayoutState = {
+                    canUndo: !!event.data.canUndo,
+                    canRedo: !!event.data.canRedo,
+                    hasSelection: !!event.data.hasSelection,
+                    hasChanges: !!event.data.hasChanges
+                };
+                if (aimaxLayoutActive) aimaxRenderLayoutTools();
+            } else if (event.data?.type === 'edit:layout') {
+                // Re-dragging the same frame replaces its pending geometry.
+                const li = aimaxPendingLayout.findIndex(l => l.selector === event.data.selector);
+                const lentry = {
+                    n: event.data.n,
+                    selector: event.data.selector,
+                    css: event.data.css,
+                    href: aimaxKnownFilePath
+                };
+                if (li >= 0) { aimaxPendingLayout[li] = lentry; } else { aimaxPendingLayout.push(lentry); }
+                aimaxUpdateSaveUI();
             } else if (event.data?.type === 'edit:remove' && typeof event.data.n === 'number') {
                 aimaxPendingEdits = aimaxPendingEdits.filter(e => e.n !== event.data.n);
+                aimaxPendingLayout = aimaxPendingLayout.filter(l => l.n !== event.data.n);
                 aimaxUpdateSaveUI();
+            } else if (event.data?.command === 'copyToClipboard') {
+                // Same document as the injected client here, so this is the
+                // client handing us the page selection to put on the clipboard.
+                vscode.postMessage({ command: 'copyToClipboard', text: event.data.text });
             } else if (event.data?.command === 'bridgeResult') {
                 aimaxOnBridgeResult(event.data);
             } else if (event.data?.command === 'saveEditResult') {

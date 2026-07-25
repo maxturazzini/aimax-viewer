@@ -12,6 +12,7 @@ Artifacts/**
 *.ts
 *.zip
 *.vsix
+*.bak
 .vscode-test/**
 tsconfig.json
 TODO.md

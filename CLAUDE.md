@@ -95,6 +95,58 @@ future "edit a rendered artifact and persist it" feature. Three facts make it wo
      The HTTP route is the right choice when the editor lives outside the webview
      postMessage channel (e.g. a page served into an iframe or the system browser).
 
+**Geometry is the exception — it never goes through `applyHtmlEdits`.** Moving or
+resizing an element would mean patching its opening tag, and an opening tag can't
+round-trip verbatim (attribute order, quoting, entities). So Edit ▸ Move/Resize
+takes the other route: `applyLayoutEdits(absolutePath, rules[])`, where each rule is
+`{n, selector, css}`. It merges the declarations into a single
+`<style data-aimax-layout>` block kept at the end of `<body>` — parse the existing
+block, upsert by selector, re-serialize, write. Consequences worth knowing:
+the block is **idempotent** (re-saving a selector overwrites its declarations),
+**machine-managed** (hand edits inside it are rewritten on the next save),
+**whitelisted** (only `transform`/`width`/`height`/`box-sizing`/min-max plus the
+stacking and visibility trio `z-index`/`position`/`display` survive sanitization —
+the last three with their own value whitelists — and selectors may not contain
+`{ } < ; @ *`), and it shares the same one-per-session `.bak`. The selector is built
+and *verified unique* client-side (`buildLayoutSelector` in
+[annotation-client.ts](src/annotation-client.ts)) — the host only sanitizes it.
+
+**z-order is not a geometry problem, it's a stacking-context problem.** Whether a
+written `z-index` does anything depends on where the two elements' stacking contexts
+meet, so `layZOrder` ranks against the elements the frame *actually overlaps*
+(document-wide — after a drag the covered box is usually a cousin, not a sibling),
+and refuses-or-warns when an ancestor between the frame and the shared context
+establishes a stacking context, because there no value can win. Anything else that
+reasons about paint order should reuse `layOverlapping`/`layLca`/`layTrapBetween`
+rather than looking at `parentElement.children`. Reach for this pattern whenever the change is presentational:
+a CSS override addressed by selector is far cheaper and safer than rewriting markup.
+
+### Reading the source in order to write it back: always `?aimax-raw=1`
+
+Every HTML response the server produces has two scripts injected before
+`</body>` — the annotation/edit client and the link handler. **What the URL
+returns is therefore not what is on disk.** The server cannot tell the two
+intentions apart: a GET for display and a GET for round-tripping look identical.
+
+> **Rule: anything that reads the source in order to rewrite it must read it raw.**
+> `fetch(url + '?aimax-raw=1')` returns the file byte-for-byte, injection skipped.
+
+Reading the served copy to *inspect* is fine — counting `<section>` for deck
+detection, pulling the `<title>` — because nothing is written back. Reading the
+served copy to *rewrite* bakes the client into the source, and the failure is
+delayed and silent: the file stays valid and the page still opens. It surfaces
+one version later, because the client starts with
+`if (window.__aimaxAnnotationLoaded) return;` — the copy frozen in the file wins
+the race and the freshly injected one exits on line 2, pinning the artifact to
+whatever version it was saved under. This actually happened: the Slide Sorter
+round-tripped the served page and accumulated **12 copies, 80 KB → 240 KB**.
+
+Two defences, both intentional: `fetchDeckSource()` in
+[slide-presenter.html](slide-presenter.html) is the only way that file reads the
+deck, and `writeDeckFile()` strips `<script data-aimax-injected>` before writing
+regardless. The backstop covers the single place whole files get written; the
+rule covers everywhere else.
+
 **To add a new direct-edit feature:** compute a verbatim `oldText`/`newText` pair from
 the raw source (not from the DOM), then either post `saveEdit` (if inside a webview
 panel) or add/extend an HTTP endpoint that calls `applyHtmlEdits`. Reuse

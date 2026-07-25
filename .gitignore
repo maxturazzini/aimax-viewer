@@ -28,3 +28,7 @@ scripts/.browser-session/
 # Environment / secrets
 .env
 .env.*
+
+# Artefatto di lavoro tenuto fuori dal versionamento di proposito: serve come
+# banco di prova per le modalità di editing, quindi cambia in continuazione.
+Artifacts/aimax-viewer-presentation copy.html

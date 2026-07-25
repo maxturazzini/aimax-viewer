@@ -9,6 +9,7 @@ export interface AimaxConfig {
     multiTab: boolean;
     cspMode: string;
     cspAllowedDomains: string[];
+    cspAllowedHttpHosts: string[];
 }
 
 export function getConfig(): AimaxConfig {
@@ -27,7 +28,8 @@ export function getConfig(): AimaxConfig {
             'cdn.jsdelivr.net',
             'cdnjs.cloudflare.com',
             'unpkg.com'
-        ])
+        ]),
+        cspAllowedHttpHosts: config.get<string[]>('csp.allowedHttpHosts', [])
     };
 }
 
@@ -41,5 +43,12 @@ export function generateCSP(): string {
     const domains = config.cspAllowedDomains;
     const httpsScheme = domains.map(d => `https://${d}`).join(' ');
 
-    return `default-src 'self' http://127.0.0.1:* http://localhost:*; script-src 'self' 'unsafe-inline' http://127.0.0.1:* http://localhost:* ${httpsScheme}; style-src 'self' 'unsafe-inline' http://127.0.0.1:* http://localhost:* ${httpsScheme}; img-src 'self' data: http://127.0.0.1:* http://localhost:* ${httpsScheme}; font-src 'self' data: http://127.0.0.1:* http://localhost:* ${httpsScheme}; connect-src 'self' http://127.0.0.1:* http://localhost:* ${httpsScheme};`;
+    // Extra plain-HTTP hosts (e.g. minimacs.local, Tailscale IPs) so remote HTTP
+    // services load in the browser panel iframe. Empty by default.
+    const httpHosts = config.cspAllowedHttpHosts || [];
+    const httpScheme = httpHosts.map(h => `http://${h}:*`).join(' ');
+    const extra = [httpsScheme, httpScheme].filter(Boolean).join(' ');
+    const frameSrc = ['http://127.0.0.1:*', 'http://localhost:*', httpScheme].filter(Boolean).join(' ');
+
+    return `default-src 'self' http://127.0.0.1:* http://localhost:* ${extra}; frame-src 'self' ${frameSrc}; script-src 'self' 'unsafe-inline' http://127.0.0.1:* http://localhost:* ${extra}; style-src 'self' 'unsafe-inline' http://127.0.0.1:* http://localhost:* ${extra}; img-src 'self' data: http://127.0.0.1:* http://localhost:* ${extra}; font-src 'self' data: http://127.0.0.1:* http://localhost:* ${extra}; connect-src 'self' http://127.0.0.1:* http://localhost:* ${extra};`;
 }
