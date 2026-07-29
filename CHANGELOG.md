@@ -2,6 +2,16 @@
 
 All notable changes to the AIMax Viewer extension will be documented in this file.
 
+## [0.1.36] - unreleased
+
+_Version in flight — new entries go here, not under a published heading. This
+header exists because they once didn't: the markdown work of 2026-07-29 was
+written under `[0.1.34]`, which had already shipped on 2026-07-25 without it, so
+the changelog credited a released version with features nobody could install.
+Dated on release._
+
+---
+
 ## [0.1.35] - 2026-07-29
 
 ### Changed — `.bak` backups are now opt-in (`aimaxViewer.edit.backupBeforeSave`, default off)
