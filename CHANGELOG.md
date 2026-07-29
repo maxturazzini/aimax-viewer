@@ -2,6 +2,34 @@
 
 All notable changes to the AIMax Viewer extension will be documented in this file.
 
+## [0.1.35] - 2026-07-29
+
+### Changed — `.bak` backups are now opt-in (`aimaxViewer.edit.backupBeforeSave`, default off)
+
+- Until now **every** write to a source file dropped a `<file>.bak` next to it before the session's first edit. That is now behind a setting, **off by default**: no more backup files appearing beside everything you edit — and in a synced folder, no more backup files syncing, indexing and cluttering the tree.
+- The switch is uniform: it governs all four write paths (`applyTextEdits`, `applyLayoutEdits`, `removeLayoutBlock`, `writeDeckFile`), with no exception for the destructive ones. One switch, no surprises about which action does or doesn't leave a `.bak`.
+- Off is a safe default because the save paths are **anchored replaces**: if the file changed underneath, they refuse with a reason instead of overwriting. **The exception is the Slide Sorter save** (`/__save-deck`), which rewrites the whole deck — with backups off, that one has no undo behind it other than git. Turn the setting on before a reorder you might want to walk back.
+- **`Restore file from backup`** (Browser Panel menu) has nothing to restore while the setting is off, and now says so, naming the setting, instead of the old "one is written automatically before the first edit of a session" — which would have been a lie.
+- The setting is read at each save rather than at activation: switching it on or off takes effect on the next edit, no window reload.
+- Internally the four copy-pasted backup blocks collapse onto a single `ensureBackup()`.
+
+### Added — Edit mode on rendered markdown
+
+- The orange ✏ Edit toggle now **saves back into the `.md`** when the page is a rendered markdown file. Until now the client was injected on those pages and let you type, but the save resolved through `urlToWorkspacePath`, which only accepts `.html`, so nothing ever reached disk.
+- It works because the client already sends plain text (a leaf's `textContent`, or a bare text node) rather than markup, and because `parseMarkdown` does no typographic rewriting: a rendered fragment is normally a verbatim substring of the source, so the anchored replace swaps it and leaves the surrounding `**`, `` ` `` or `#` untouched.
+- **The two weaker disambiguators are stripped on markdown.** `outerHTML` is rendered markup that exists nowhere in the source. `occurrenceIndex` is worse: the client counts DOM elements whose whole text equals the fragment while the host counts substring hits in the source, and a `.md` also carries text the renderer never emits (frontmatter, link URLs, list markers), so the Nth element is not the Nth hit. Only unique anchors are accepted; everything else is refused with a reason. The failure mode is therefore "did not save and said so", never "saved in the wrong place".
+- Measured over a real corpus of 8 documents and 2828 editable spots: 94% of edits of 26+ characters succeed, 99% of 61+ characters, i.e. the sentence someone is actually correcting. Short repeated labels are where it refuses. Two heuristics that would raise the overall rate (reconstructing markdown delimiters from tags, 76%; anchoring on the containing block, 80%) were measured and left out on purpose: each buys a few points and none closes the gap. The change that closes it is a source map from the parser, tracked separately.
+- Move/Resize is refused on markdown with an explicit message: geometry is a `<style>` block appended to `<body>`, and a `.md` has none.
+
+### Added — writing back to a markdown source (`POST /__save-md`)
+
+- An artifact that renders a `.md` can now **write back into it**, which until now only `.html` could do. Both existing save endpoints resolve their target through `urlToWorkspacePath`, and that function rejects anything not ending in `.html` — so every markdown source the viewer serves was read-only from the page's side, and the only way to change a line was to go through `/__claude` and spend a full agent run on it.
+- Body is `{ path, edits: [{oldText, newText}] }` with `path` **workspace-relative** (`projects/todo.md`). The write primitive is the same `applyTextEdits` as the HTML savers, same backup policy included (see the `.bak` entry above): an **anchored verbatim replace**, not a full-file overwrite. On a file that lives in a synced folder this is the point — if it changed underneath (OneDrive, another editor, an agent), the save fails with "text not found" instead of silently clobbering the other version.
+- The new resolver `mdPathToWorkspacePath` takes a path rather than a URL, and gates on containment, extension and existence. Containment is `path.resolve` (which collapses `..` first) plus a `root + separator` prefix check — a bare `startsWith(root)` would have accepted a sibling directory whose name merely begins with the root's.
+- Not atomic across a batch: `applyTextEdits` writes whatever applied. Callers wanting all-or-nothing send one edit per call and order them so the recoverable failure lands last — the TODO card in miniMe's `artifacts/index.html`, first consumer of the endpoint, appends to `done.md` before removing from `todo.md`, so a half-failure leaves a visible duplicate instead of a lost task.
+
+---
+
 ## [0.1.34] - 2026-07-25
 
 ### Added
@@ -35,7 +63,7 @@ All notable changes to the AIMax Viewer extension will be documented in this fil
 > measured price, not a theoretical one: anyone extending it needs to know both.
 
 - **Why a CSS block and not the element's tag.** The whole save path rests on a
-  **verbatim** replace: `applyHtmlEdits` finds the old string byte for byte in the
+  **verbatim** replace: `applyTextEdits` finds the old string byte for byte in the
   source and swaps it. Text edits suit that — the text inside an element survives
   untouched. An **opening tag** does not: run it through the DOM and re-serialize
   it and the attribute order, the quote style, the entity encoding and the
@@ -174,7 +202,7 @@ All notable changes to the AIMax Viewer extension will be documented in this fil
 - `slide-presenter.html`: Slide Sorter overlay; the slide model now keeps **all** sections (with a `hidden` flag, array index = DOM index) so navigation skips hidden slides while explicit clicks still show them.
 - `src/extension.ts`: new `/__save-deck` HTTP endpoint (`writeDeckFile`) for full-file deck saves, reusing the same workspace gate and one-per-session `.bak` policy as `/__save-notes`.
 - `src/annotation-client.ts`: extended `annot:toggle` payload with `mode: 'comment' | 'edit'` and `notes: boolean`; new `edit:save`, `edit:remove`, `edit:result`, `edit:toast` message types; in-iframe toast + Notes reveal stylesheet.
-- `src/extension.ts`: new `applyHtmlEdits()` helper, `filePathToWorkspacePath()` gate, `resolveEditTarget()`, `handleSaveEdit()`, session-scoped `editBackupOnce: Set<string>`. Wired `saveEdit` into all three panel `onDidReceiveMessage` handlers (Browser Panel single-tab, Browser Panel multi-tab, Home Panel).
+- `src/extension.ts`: new `applyTextEdits()` helper, `filePathToWorkspacePath()` gate, `resolveEditTarget()`, `handleSaveEdit()`, session-scoped `editBackupOnce: Set<string>`. Wired `saveEdit` into all three panel `onDidReceiveMessage` handlers (Browser Panel single-tab, Browser Panel multi-tab, Home Panel).
 
 ---
 

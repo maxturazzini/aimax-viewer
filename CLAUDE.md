@@ -67,35 +67,123 @@ future "edit a rendered artifact and persist it" feature. Three facts make it wo
    is the equivalent for a directly-supplied path (Home Panel case), and
    `resolveEditTarget(message)` accepts either `{url}` or `{filePath}`.
 
-2. **`applyHtmlEdits(absolutePath, edits[])` is the single write primitive.** Each
+2. **`applyTextEdits(absolutePath, edits[])` is the single write primitive.** Each
    edit is `{n, oldText, newText, selector?, occurrenceIndex?, outerHTML?}`. It does an
    **anchored verbatim text replace** in the raw source with three disambiguation
    levels: (1) `oldText` unique → replace; (2) ambiguous but `outerHTML` unique →
    replace inside it; (3) still ambiguous → pick the `occurrenceIndex`-th match
    (DOM order ≈ source order). On 0 matches → "Text not found"; on unresolved
    ambiguity → rejected. Per-edit failures don't block the rest of the batch. It
-   writes a **one-per-file-per-session `.bak` backup** (`editBackupOnce: Set`)
-   before the first edit. **`oldText` must match the file bytes verbatim** — so
+   calls `ensureBackup()` before the first edit, which writes a
+   **one-per-file-per-session `.bak`** (`editBackupOnce: Set`) **only when
+   `aimaxViewer.edit.backupBeforeSave` is on — and it is off by default**, see
+   "Backups" below. **`oldText` must match the file bytes verbatim** — so
    anchor on raw-source substrings, not DOM-serialized HTML (attribute order,
    entities, whitespace inside tags won't round-trip). Plain text inside an
    element survives verbatim; that's why edits target single text-node leaves.
 
-3. **Two entry points reach `applyHtmlEdits`:**
+3. **Three entry points reach `applyTextEdits`:**
    - **Webview → host (postMessage):** the panel scripts post
      `vscode.postMessage({ command: 'saveEdit', url|filePath, edits })`; the panel's
      `onDidReceiveMessage` calls `handleSaveEdit(message, panel)`, which resolves the
      target, applies the edits, and posts back `{ command: 'saveEditResult', applied, failed }`.
      Used by Edit mode (orange ✏ toggle) in Browser Panel and Home Panel.
+     **This path also covers rendered markdown** (`mdUrlToWorkspacePath`, `kind: 'md'`),
+     with a deliberately narrower policy — see "Editing rendered markdown" below.
    - **HTTP endpoint:** `POST /__save-notes` with body `{ url, oldText, newText }`
-     resolves via `urlToWorkspacePath` and calls `applyHtmlEdits` directly, returning
+     resolves via `urlToWorkspacePath` and calls `applyTextEdits` directly, returning
      `{ ok, error? }`. Used by the **in-panel slide presenter's "Save notes" button**
      (`slide-presenter.html` → `agenticSaveNotes()`), which refetches the deck source,
      locates the slide's `<div class="speaker-notes">…</div>` block, checks it is
      unique, escapes the new inner text, and POSTs the `oldBlock`/`newBlock` pair.
      The HTTP route is the right choice when the editor lives outside the webview
      postMessage channel (e.g. a page served into an iframe or the system browser).
+   - **HTTP endpoint, markdown:** `POST /__save-md` with body
+     `{ path, edits: [{oldText, newText}] }`, where `path` is **workspace-relative**
+     (`projects/todo.md`). Resolves via `mdPathToWorkspacePath` — the sibling of
+     `urlToWorkspacePath` for `.md`/`.markdown`, which the `.html` gate there would
+     reject — then calls `applyTextEdits` and returns `{ ok, file, applied, failed, error? }`.
+     Used by artifacts that render a markdown file and want to write back into it
+     (the TODO card in `artifacts/index.html` edits and closes entries this way).
+     Two things to know before building on it: the path is taken as a path, not a
+     URL, so the gates are containment (`path.resolve` collapses `..` first, then a
+     `root + sep` prefix check — a bare `startsWith` would accept a sibling directory
+     whose name merely begins with the root's), extension, and existence; and the
+     batch is **not atomic** — `applyTextEdits` writes whatever applied, so a caller
+     needing all-or-nothing sends one edit per call and orders them so that the
+     recoverable failure comes last. Anything reading the file to build `oldText`
+     must fetch it with `?aimax-raw=1` (see the rule below).
 
-**Geometry is the exception — it never goes through `applyHtmlEdits`.** Moving or
+### Backups (`aimaxViewer.edit.backupBeforeSave`, default **off**)
+
+Every write to a source file goes through **`ensureBackup(absolutePath, source?)`**
+— `applyTextEdits`, `applyLayoutEdits`, `removeLayoutBlock` and `writeDeckFile`,
+no exceptions. It is a no-op unless the setting is on, and unless this session
+hasn't already backed that file up (`editBackupOnce`). Callers that already read
+the file pass the bytes in; `writeDeckFile` doesn't have them, so it omits the
+argument and lets `ensureBackup` read — behind the flag, so nothing is read when
+backups are off. A failed backup **aborts the write** in all four callers.
+
+The setting is read **per save**, not at activation, so flipping it takes effect
+on the next edit without a window reload. There is a test for exactly that.
+
+Two consequences worth knowing before changing this:
+
+- **`Restore file from backup` (Browser Panel menu) does nothing while backups
+  are off** — it is the only undo the UI offers. `handleRestore` distinguishes
+  "no backup yet this session" from "backups are disabled" in its message,
+  because sending someone to look for a `.bak` that was never meant to exist is
+  the worse failure.
+- **`writeDeckFile` is the one write with no undo behind it** when backups are
+  off. The other three are anchored replaces: if the source moved underneath
+  they refuse and say so. The Slide Sorter save overwrites the whole deck.
+
+Off is the right default because the anchored-replace design already refuses
+rather than clobbers, and a `.bak` sibling in a synced folder is a file that
+syncs, indexes and shows up in the file tree. Turn it on when you're about to do
+something you'd want to walk back.
+
+### Editing rendered markdown
+
+Edit mode works on a rendered `.md` and writes back into the source, which is
+possible because of two properties that hold together and would not survive
+either one alone:
+
+- the edit client already sends **plain text**, not markup: `oldText` is a text
+  leaf's `textContent`, or a bare text node wrapped in a throwaway span;
+- `parseMarkdown` is a linear chain of regex replaces with **no typographic
+  rewriting** (no smart quotes, no `--` → dash), so a rendered fragment is
+  normally a verbatim substring of the source. The text inside `**bold**`
+  renders as `bold`, and `bold` is in the file exactly there.
+
+So the anchored replace finds it and swaps it, leaving the markup around it
+alone. **Both weaker disambiguators are stripped for `kind: 'md'`:**
+
+- `outerHTML` is rendered markup that exists nowhere in the `.md` — level 2
+  could only match by accident;
+- `occurrenceIndex` is the dangerous one. The client counts DOM elements whose
+  *whole* text equals the fragment; the host counts *substring* hits in the
+  source. A `.md` also carries text the renderer never emits (frontmatter, which
+  `extractFrontmatter` strips, link URLs, list markers), so the Nth element is
+  not the Nth hit and level 3 would write in the wrong place.
+
+What's left is level 1: replace when the anchor is unique, otherwise refuse.
+Measured over a real corpus (8 files, 2828 editable spots), that resolves **94%
+of edits of 26+ characters and 99% of 61+** — i.e. the sentence someone is
+actually fixing — and mostly refuses on short repeated labels (`Cosa`, `[ ]`,
+a lone `**Fatture**` appearing in several table rows), where refusing is the
+correct answer. Overall across all spots it is 68%; reconstructing markdown
+delimiters from tags lifts that to 76%, and anchoring on the containing block
+to 80%. Those heuristics were measured and deliberately **not** shipped: each
+recovers a few points and none closes the gap. The change that would close it is
+a **source map from the parser** (emit source offsets on generated elements, then
+replace a byte range instead of searching for text), which means rewriting
+`markdown-parser.ts` from a chain of `.replace()` into an offset-aware pass.
+
+Move/Resize is rejected on markdown: geometry is a `<style>` block appended to
+`<body>`, and a `.md` has no body to append it to.
+
+**Geometry is the exception — it never goes through `applyTextEdits`.** Moving or
 resizing an element would mean patching its opening tag, and an opening tag can't
 round-trip verbatim (attribute order, quoting, entities). So Edit ▸ Move/Resize
 takes the other route: `applyLayoutEdits(absolutePath, rules[])`, where each rule is
@@ -149,7 +237,7 @@ rule covers everywhere else.
 
 **To add a new direct-edit feature:** compute a verbatim `oldText`/`newText` pair from
 the raw source (not from the DOM), then either post `saveEdit` (if inside a webview
-panel) or add/extend an HTTP endpoint that calls `applyHtmlEdits`. Reuse
+panel) or add/extend an HTTP endpoint that calls `applyTextEdits`. Reuse
 `urlToWorkspacePath`/`resolveEditTarget` for the path — never trust a client-supplied
 filesystem path. The `.bak` backup and ambiguity gates come for free.
 

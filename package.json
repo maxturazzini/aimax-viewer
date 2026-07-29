@@ -2,7 +2,7 @@
   "name": "aimax-viewer",
   "displayName": "AIMax Viewer",
   "description": "Auto-open Artifacts at startup + internal browser for localhost",
-  "version": "0.1.34",
+  "version": "0.1.35",
   "publisher": "maxturazzini",
   "icon": "icon.png",
   "repository": {
@@ -306,6 +306,11 @@
           "type": "boolean",
           "default": false,
           "description": "Show console panel by default when opening artifacts"
+        },
+        "aimaxViewer.edit.backupBeforeSave": {
+          "type": "boolean",
+          "default": false,
+          "description": "Write a <file>.bak next to a file before the first edit AIMax saves to it in each session. Off by default: saves are anchored replaces that refuse rather than overwrite when the source changed underneath, so the backup is usually just a sibling file (which in a synced folder syncs too). Turn it on to arm 'Restore file from backup' — with this off that command has nothing to restore."
         },
         "aimaxViewer.webview.enableJavaScript": {
           "type": "boolean",

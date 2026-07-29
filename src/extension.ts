@@ -956,12 +956,86 @@ function filePathToWorkspacePath(filePath: string): { absolute: string; relative
     return { absolute: abs, relative: path.relative(ws, abs) };
 }
 
+// Same as urlToWorkspacePath but for the markdown sources the server renders.
+// Kept separate rather than widening that function: `/__save-deck` also goes
+// through it and overwrites the whole file, which is meaningful for a deck and
+// destructive for a .md. Only Edit mode's text path is meant to reach here.
+function mdUrlToWorkspacePath(url: string): { absolute: string; relative: string } | null {
+    const ws = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (!ws) return null;
+    try {
+        const u = new URL(url);
+        if (u.hostname !== '127.0.0.1' || u.port !== String(serverPort)) return null;
+        const p = u.pathname;
+        if (p.startsWith('/__proxy__/') || p.startsWith('/__presenter') || p.startsWith('/api/')) return null;
+        if (!/\.(md|markdown)$/i.test(p)) return null;
+        const rel = decodeURIComponent(p).replace(/^\/+/, '');
+        const abs = path.join(ws, rel);
+        if (!fs.existsSync(abs)) return null;
+        return { absolute: abs, relative: rel };
+    } catch {
+        return null;
+    }
+}
+
+// Resolve a workspace-relative path to a markdown source the viewer serves.
+// Sibling of urlToWorkspacePath(), but for .md: those files are rendered to
+// HTML on the way out, so the .html gate there would reject every one of them.
+// Same trust model — the target must already exist inside the workspace root.
+function mdPathToWorkspacePath(relPath: string): { absolute: string; relative: string } | null {
+    const ws = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (!ws || !relPath) return null;
+    let rel = relPath.trim();
+    try { rel = decodeURIComponent(rel); } catch { /* not encoded — use verbatim */ }
+    rel = rel.split('?')[0].split('#')[0].replace(/^\/+/, '');
+    if (!rel) return null;
+    const abs = path.resolve(ws, rel);
+    // path.resolve() collapses '..' first, so this containment check is also
+    // the traversal gate. The separator matters: a bare startsWith(ws) would
+    // accept a sibling directory whose name merely begins with the root's.
+    if (abs !== ws && !abs.startsWith(ws + path.sep)) return null;
+    if (!/\.(md|markdown)$/i.test(abs)) return null;
+    if (!fs.existsSync(abs)) return null;
+    return { absolute: abs, relative: path.relative(ws, abs) };
+}
+
 // Tracks files for which we've already created a .bak in the current session.
 // Reset each activation. The .bak captures the on-disk content right before
 // the FIRST save of the session — subsequent saves never overwrite it.
 const editBackupOnce = new Set<string>();
 
-interface HtmlEditRequest {
+// Single switch for every .bak the extension writes. OFF by default: the save
+// paths are anchored replaces that refuse when the source moved under them
+// rather than clobber it, so a sibling .bak next to every edited file is
+// clutter more often than it is a rescue — and in a synced folder it is a file
+// that syncs too. Turning `aimaxViewer.edit.backupBeforeSave` on restores the
+// old behaviour everywhere, including the whole-file Slide Sorter save.
+//
+// Read per save rather than at activation, so flipping the setting takes effect
+// on the next edit without reloading the window.
+function backupsEnabled(): boolean {
+    return vscode.workspace.getConfiguration('aimaxViewer').get<boolean>('edit.backupBeforeSave', false);
+}
+
+// Writes the one-per-session .bak for `absolutePath`. No-op when backups are
+// off or this session already took one. Callers that already hold the file's
+// bytes pass them in: re-reading here would back up a different version if the
+// file changed between their read and this one. Returns the error rather than
+// throwing — every caller aborts its write when the backup fails.
+function ensureBackup(absolutePath: string, source?: string): { ok: boolean; error?: string } {
+    if (!backupsEnabled()) return { ok: true };
+    if (editBackupOnce.has(absolutePath)) return { ok: true };
+    try {
+        const content = source !== undefined ? source : fs.readFileSync(absolutePath, 'utf8');
+        fs.writeFileSync(absolutePath + '.bak', content, 'utf8');
+        editBackupOnce.add(absolutePath);
+        return { ok: true };
+    } catch (err: any) {
+        return { ok: false, error: err?.message || String(err) };
+    }
+}
+
+interface TextEditRequest {
     n: number;
     oldText: string;
     newText: string;
@@ -969,7 +1043,7 @@ interface HtmlEditRequest {
     occurrenceIndex?: number;  // 0-based position of the element among same-text DOM siblings
     outerHTML?: string;        // full opening tag + text + closing tag (stronger anchor)
 }
-interface HtmlEditOutcome { applied: number[]; failed: { n: number; reason: string }[]; }
+interface EditOutcome { applied: number[]; failed: { n: number; reason: string }[]; }
 
 // Find every starting offset of `needle` in `hay`. Empty needle returns [].
 function findAllOffsets(hay: string, needle: string): number[] {
@@ -989,8 +1063,14 @@ function findAllOffsets(hay: string, needle: string): number[] {
 //   3. still ambiguous → use occurrenceIndex (DOM order ≈ source order) to pick the Nth match
 // On all-fail (0 anywhere, or ambiguous with no occurrenceIndex hint) → reject.
 // Failed edits don't block other edits in the batch.
-function applyHtmlEdits(absolutePath: string, edits: HtmlEditRequest[]): HtmlEditOutcome {
-    const out: HtmlEditOutcome = { applied: [], failed: [] };
+//
+// Format-agnostic by construction: it reads the file as a string and swaps
+// bytes, it never parses. Only level 2 knows about markup, and only because a
+// caller passed `outerHTML` — markdown callers don't, so they get levels 1 and 3.
+// (It was `applyHtmlEdits` until the markdown save path arrived and made the
+// name a lie; the behaviour never was HTML-specific.)
+function applyTextEdits(absolutePath: string, edits: TextEditRequest[]): EditOutcome {
+    const out: EditOutcome = { applied: [], failed: [] };
     let source: string;
     try {
         source = fs.readFileSync(absolutePath, 'utf8');
@@ -998,14 +1078,10 @@ function applyHtmlEdits(absolutePath: string, edits: HtmlEditRequest[]): HtmlEdi
         for (const e of edits) out.failed.push({ n: e.n, reason: 'Read error: ' + (err?.message || err) });
         return out;
     }
-    if (!editBackupOnce.has(absolutePath)) {
-        try {
-            fs.writeFileSync(absolutePath + '.bak', source, 'utf8');
-            editBackupOnce.add(absolutePath);
-        } catch (err: any) {
-            for (const e of edits) out.failed.push({ n: e.n, reason: 'Backup failed: ' + (err?.message || err) });
-            return out;
-        }
+    const backup = ensureBackup(absolutePath, source);
+    if (!backup.ok) {
+        for (const e of edits) out.failed.push({ n: e.n, reason: 'Backup failed: ' + backup.error });
+        return out;
     }
     let working = source;
     for (const e of edits) {
@@ -1195,8 +1271,8 @@ function serializeLayoutBlock(map: Map<string, Map<string, string>>): string {
     return lines.join('\n');
 }
 
-function applyLayoutEdits(absolutePath: string, rules: LayoutEditRequest[]): HtmlEditOutcome {
-    const out: HtmlEditOutcome = { applied: [], failed: [] };
+function applyLayoutEdits(absolutePath: string, rules: LayoutEditRequest[]): EditOutcome {
+    const out: EditOutcome = { applied: [], failed: [] };
     let source: string;
     try {
         source = fs.readFileSync(absolutePath, 'utf8');
@@ -1204,14 +1280,10 @@ function applyLayoutEdits(absolutePath: string, rules: LayoutEditRequest[]): Htm
         for (const r of rules) out.failed.push({ n: r.n, reason: 'Read error: ' + (err?.message || err) });
         return out;
     }
-    if (!editBackupOnce.has(absolutePath)) {
-        try {
-            fs.writeFileSync(absolutePath + '.bak', source, 'utf8');
-            editBackupOnce.add(absolutePath);
-        } catch (err: any) {
-            for (const r of rules) out.failed.push({ n: r.n, reason: 'Backup failed: ' + (err?.message || err) });
-            return out;
-        }
+    const backup = ensureBackup(absolutePath, source);
+    if (!backup.ok) {
+        for (const r of rules) out.failed.push({ n: r.n, reason: 'Backup failed: ' + backup.error });
+        return out;
     }
     const existing = LAYOUT_BLOCK_RE.exec(source);
     const map = existing ? parseLayoutBlock(existing[1]) : new Map<string, Map<string, string>>();
@@ -1289,10 +1361,8 @@ function removeLayoutBlock(absolutePath: string): { ok: boolean; removed: boolea
         const source = fs.readFileSync(absolutePath, 'utf8');
         const m = LAYOUT_BLOCK_RE.exec(source);
         if (!m) return { ok: true, removed: false };
-        if (!editBackupOnce.has(absolutePath)) {
-            fs.writeFileSync(absolutePath + '.bak', source, 'utf8');
-            editBackupOnce.add(absolutePath);
-        }
+        const backup = ensureBackup(absolutePath, source);
+        if (!backup.ok) return { ok: false, removed: false, error: 'Backup failed: ' + backup.error };
         const head = source.slice(0, m.index).replace(/[ \t]*\n?$/, '');
         const tail = source.slice(m.index + m[0].length).replace(/^\n/, '');
         fs.writeFileSync(absolutePath, head + '\n' + tail, 'utf8');
@@ -1318,9 +1388,10 @@ function restoreFileFromBackup(absolutePath: string): { ok: boolean; error?: str
 }
 
 // Full-file overwrite used by the Slide Sorter (reorder / hide-show), which
-// rewrites the whole deck rather than patching individual blocks. Writes a
-// one-per-session .bak first (same policy as applyHtmlEdits) so the original
-// on-disk content is always recoverable.
+// rewrites the whole deck rather than patching individual blocks. Goes through
+// ensureBackup first (same policy as applyTextEdits) — note that with backups
+// off, which is the default, this is the one write with no undo behind it: the
+// others refuse when their anchor moved, this one replaces the file wholesale.
 // AIMax injects its annotation/edit and link-handler clients into every served
 // HTML response. Anything that round-trips a served page back to disk therefore
 // risks writing those scripts INTO the source — and because the client
@@ -1338,11 +1409,11 @@ export function stripInjectedClients(html: string): { html: string; removed: num
 
 function writeDeckFile(absolutePath: string, content: string): { ok: boolean; error?: string } {
     try {
-        if (!editBackupOnce.has(absolutePath)) {
-            const source = fs.readFileSync(absolutePath, 'utf8');
-            fs.writeFileSync(absolutePath + '.bak', source, 'utf8');
-            editBackupOnce.add(absolutePath);
-        }
+        // No source to hand over: this is the one path that doesn't already
+        // hold the old bytes, so ensureBackup reads them — and only if backups
+        // are on, which is why the read sits behind it rather than in front.
+        const backup = ensureBackup(absolutePath);
+        if (!backup.ok) return { ok: false, error: 'Backup failed: ' + backup.error };
         const cleaned = stripInjectedClients(content);
         if (cleaned.removed > 0) {
             console.warn('[AIMax] Stripped ' + cleaned.removed + ' injected client script(s) before writing ' + absolutePath);
@@ -1356,9 +1427,18 @@ function writeDeckFile(absolutePath: string, content: string): { ok: boolean; er
 
 // Resolve edit target from either a Browser Panel (url) or Home Panel (filePath)
 // payload. Returns null if not eligible — callers must abort silently.
-function resolveEditTarget(message: any): { absolute: string; relative: string } | null {
-    if (message.url) return urlToWorkspacePath(String(message.url));
-    if (message.filePath) return filePathToWorkspacePath(String(message.filePath));
+function resolveEditTarget(message: any): { absolute: string; relative: string; kind: 'html' | 'md' } | null {
+    if (message.url) {
+        const html = urlToWorkspacePath(String(message.url));
+        if (html) return { ...html, kind: 'html' };
+        const md = mdUrlToWorkspacePath(String(message.url));
+        if (md) return { ...md, kind: 'md' };
+        return null;
+    }
+    if (message.filePath) {
+        const html = filePathToWorkspacePath(String(message.filePath));
+        return html ? { ...html, kind: 'html' } : null;
+    }
     return null;
 }
 
@@ -1368,11 +1448,16 @@ function resolveEditTarget(message: any): { absolute: string; relative: string }
 function handleRestore(message: any, panel: vscode.WebviewPanel | undefined): void {
     const target = resolveEditTarget(message);
     if (!target) {
-        vscode.window.showWarningMessage('AIMax: this page is not an editable .html served from your workspace.');
+        vscode.window.showWarningMessage('AIMax: this page is not an editable file served from your workspace.');
         return;
     }
     const name = path.basename(target.absolute);
     const reload = () => panel?.webview.postMessage({ command: 'reloadFrame' });
+
+    if (message.command === 'restoreLayout' && target.kind === 'md') {
+        vscode.window.showInformationMessage('AIMax: ' + name + ' is markdown — it has no layout to restore, only text edits.');
+        return;
+    }
 
     if (message.command === 'restoreLayout') {
         vscode.window.showWarningMessage(
@@ -1396,7 +1481,11 @@ function handleRestore(message: any, panel: vscode.WebviewPanel | undefined): vo
 
     const bakExists = fs.existsSync(target.absolute + '.bak');
     if (!bakExists) {
-        vscode.window.showInformationMessage('AIMax: no backup for ' + name + ' yet — one is written automatically before the first edit of a session.');
+        // Two different "nothing to restore" states, and saying the wrong one
+        // sends people looking for a file that was never meant to exist.
+        vscode.window.showInformationMessage(backupsEnabled()
+            ? 'AIMax: no backup for ' + name + ' yet — one is written automatically before the first edit of a session.'
+            : 'AIMax: backups are off, so there is nothing to restore for ' + name + '. Turn on "aimaxViewer.edit.backupBeforeSave" to have a .bak written before the first edit of each session.');
         return;
     }
     vscode.window.showWarningMessage(
@@ -1418,7 +1507,7 @@ function handleRestore(message: any, panel: vscode.WebviewPanel | undefined): vo
 function handleSaveEdit(message: any, panel: vscode.WebviewPanel | undefined): void {
     if (!panel) return;
     const target = resolveEditTarget(message);
-    const edits = Array.isArray(message.edits) ? message.edits as HtmlEditRequest[] : [];
+    const edits = Array.isArray(message.edits) ? message.edits as TextEditRequest[] : [];
     const layout = Array.isArray(message.layout) ? message.layout as LayoutEditRequest[] : [];
     const allNs = [...edits.map(e => e.n), ...layout.map(l => l.n)];
     if (!target) {
@@ -1438,16 +1527,42 @@ function handleSaveEdit(message: any, panel: vscode.WebviewPanel | undefined): v
         });
         return;
     }
-    // Text first, then layout: applyHtmlEdits writes synchronously, so the
+    // On markdown the two weaker disambiguators must not be used.
+    //
+    // `outerHTML` is rendered markup that exists nowhere in the .md, so level 2
+    // could only ever match by accident. `occurrenceIndex` is worse: the client
+    // counts DOM elements whose WHOLE text equals the fragment, while the host
+    // counts substring hits in the source — and a .md source also carries text
+    // the renderer never emits (frontmatter, link URLs, list markers). The Nth
+    // element is therefore not the Nth hit, and level 3 would write in the
+    // wrong place. Stripping both leaves level 1: replace only when the anchor
+    // is unique, otherwise refuse. Measured on a real corpus, that still
+    // resolves ~94% of edits of 26 characters or more (a sentence being fixed)
+    // and mostly refuses on short labels, which is the safe way round.
+    const isMd = target.kind === 'md';
+    const textEdits = isMd
+        ? edits.map(e => ({ n: e.n, oldText: e.oldText, newText: e.newText }))
+        : edits;
+
+    // Text first, then layout: applyTextEdits writes synchronously, so the
     // layout pass re-reads the already-updated source and its <style> block
     // insertion can't invalidate the verbatim anchors of the text edits.
-    const outcome: HtmlEditOutcome = edits.length
-        ? applyHtmlEdits(target.absolute, edits)
+    const outcome: EditOutcome = textEdits.length
+        ? applyTextEdits(target.absolute, textEdits)
         : { applied: [], failed: [] };
     if (layout.length) {
-        const layoutOutcome = applyLayoutEdits(target.absolute, layout);
-        outcome.applied.push(...layoutOutcome.applied);
-        outcome.failed.push(...layoutOutcome.failed);
+        if (isMd) {
+            // Geometry is a <style> block appended to <body>; a .md has no body
+            // to append it to, and writing CSS into the source would corrupt it.
+            outcome.failed.push(...layout.map(l => ({
+                n: l.n,
+                reason: 'Move/Resize is not available on markdown — only text edits are saved back to the .md'
+            })));
+        } else {
+            const layoutOutcome = applyLayoutEdits(target.absolute, layout);
+            outcome.applied.push(...layoutOutcome.applied);
+            outcome.failed.push(...layoutOutcome.failed);
+        }
     }
     panel.webview.postMessage({ command: 'saveEditResult', ...outcome });
 }
@@ -2318,7 +2433,7 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
         <button class="toolbar-btn" id="annotBtn" onclick="toggleAnnotMode()" title="Toggle annotation mode">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#00d4ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
         </button>
-        <button class="toolbar-btn" id="editBtn" onclick="toggleEditMode()" title="Edit text in place (HTML only)" disabled>
+        <button class="toolbar-btn" id="editBtn" onclick="toggleEditMode()" title="Edit text in place (.html and .md)" disabled>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ff9500" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
         </button>
         <button class="toolbar-btn" id="bridgeToolbarBtn" onclick="aimaxBridgeToggle()" title="Claude Bridge"><span style="color:#00d4ff;font-size:14px;line-height:1;">&#10042;</span></button>
@@ -3225,23 +3340,38 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
             setTimeout(() => { syncToggleUI(); }, 1800);
         }
 
-        // Enable Edit toggle only when current URL is an AIMax-served .html file
-        // (mirrors urlToWorkspacePath() gate on the host side).
+        // Enable Edit toggle when the current URL is an AIMax-served .html or .md
+        // (mirrors the urlToWorkspacePath / mdUrlToWorkspacePath gates on the host).
+        // Markdown is text-only: geometry has no <body> to attach a <style> block
+        // to, so the Move/Resize sub-mode is disabled rather than left to fail on save.
         function refreshEditAvailability(url) {
             let eligible = false;
+            let isMd = false;
             try {
                 const u = new URL(url);
-                eligible = (u.hostname === '127.0.0.1' || u.hostname === 'localhost')
+                const served = (u.hostname === '127.0.0.1' || u.hostname === 'localhost')
                     && u.port === '${serverPort}'
                     && !u.pathname.startsWith('/__proxy__/')
                     && !u.pathname.startsWith('/__presenter')
-                    && !u.pathname.startsWith('/api/')
-                    && u.pathname.toLowerCase().endsWith('.html');
+                    && !u.pathname.startsWith('/api/');
+                const p = u.pathname.toLowerCase();
+                isMd = served && (p.endsWith('.md') || p.endsWith('.markdown'));
+                eligible = served && (p.endsWith('.html') || isMd);
             } catch (_) {}
             editBtn.disabled = !eligible;
             editBtn.title = eligible
-                ? 'Edit text in place (writes to source HTML on disk)'
-                : 'Edit available only on .html files served by AIMax (not .md, proxied, or external)';
+                ? (isMd
+                    ? 'Edit text in place (writes back into the source .md — text only)'
+                    : 'Edit text in place (writes to source HTML on disk)')
+                : 'Edit available only on .html or .md files served by AIMax (not proxied or external)';
+            const layoutBtn = document.getElementById('layoutBtn');
+            if (layoutBtn) {
+                layoutBtn.disabled = isMd;
+                layoutBtn.title = isMd
+                    ? 'Move/Resize is not available on markdown — text edits only'
+                    : 'Move/Resize mode — drag frames, drag handles to resize, arrows to nudge';
+                if (isMd && layoutActive) setEditSubmode('text');
+            }
             if (!eligible && editActive) {
                 // URL navigated away from eligible — turn edit off but keep pending edits
                 editActive = false;
@@ -3889,7 +4019,7 @@ function startHttpServer(workspaceFolder: string) {
         // Direct save of speaker-notes edits from the in-panel presenter.
         // Body: { url, oldText, newText }. Resolves the deck file via the same
         // gate as Edit mode (urlToWorkspacePath) and applies an anchored
-        // text replace via applyHtmlEdits (writes a one-per-session .bak first).
+        // text replace via applyTextEdits (one-per-session .bak first, if on).
         if (url === '/__save-notes' && req.method === 'POST') {
             let body = '';
             req.on('data', (chunk: Buffer) => { body += chunk.toString(); });
@@ -3912,7 +4042,7 @@ function startHttpServer(workspaceFolder: string) {
                     res.end(JSON.stringify({ ok: false, error: 'Missing oldText/newText' }));
                     return;
                 }
-                const outcome = applyHtmlEdits(target.absolute, [{ n: 1, oldText: parsed.oldText, newText: parsed.newText }]);
+                const outcome = applyTextEdits(target.absolute, [{ n: 1, oldText: parsed.oldText, newText: parsed.newText }]);
                 const ok = outcome.applied.length === 1;
                 res.writeHead(ok ? 200 : 409, headers);
                 res.end(JSON.stringify({
@@ -3925,7 +4055,7 @@ function startHttpServer(workspaceFolder: string) {
 
         // Full-file save of a deck from the Slide Sorter (reorder / hide-show).
         // Body: { url, content }. Resolves the deck via the same gate as Edit
-        // mode and overwrites the file (one-per-session .bak written first).
+        // mode and overwrites the file (one-per-session .bak first, if on).
         if (url === '/__save-deck' && req.method === 'POST') {
             let body = '';
             req.on('data', (chunk: Buffer) => { body += chunk.toString(); });
@@ -3951,6 +4081,64 @@ function startHttpServer(workspaceFolder: string) {
                 const outcome = writeDeckFile(target.absolute, parsed.content);
                 res.writeHead(outcome.ok ? 200 : 500, headers);
                 res.end(JSON.stringify(outcome));
+            });
+            return;
+        }
+
+        // Direct save of edits to a markdown source served by the viewer.
+        // Body: { path, edits: [{oldText, newText}] } — path is workspace-relative
+        // (e.g. "projects/todo.md"). Same write primitive and same backup policy
+        // as the HTML savers. Anchored replace rather than full-file overwrite on
+        // purpose: a .md that changed underneath (OneDrive sync, another editor,
+        // an agent) fails loudly with "text not found" instead of being clobbered.
+        // Note it is NOT atomic across a batch — applyTextEdits writes whatever
+        // applied. Callers needing all-or-nothing should send one edit per call
+        // and order them so the recoverable failure comes last.
+        if (url === '/__save-md' && req.method === 'POST') {
+            let body = '';
+            req.on('data', (chunk: Buffer) => { body += chunk.toString(); });
+            req.on('end', () => {
+                const headers: Record<string, string> = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' };
+                let parsed: any;
+                try { parsed = JSON.parse(body); } catch {
+                    res.writeHead(400, headers);
+                    res.end(JSON.stringify({ ok: false, error: 'Invalid JSON' }));
+                    return;
+                }
+                const target = mdPathToWorkspacePath(String(parsed.path || ''));
+                if (!target) {
+                    res.writeHead(400, headers);
+                    res.end(JSON.stringify({ ok: false, error: 'Not an existing .md under this workspace' }));
+                    return;
+                }
+                const incoming = Array.isArray(parsed.edits) ? parsed.edits : [];
+                if (!incoming.length) {
+                    res.writeHead(400, headers);
+                    res.end(JSON.stringify({ ok: false, error: 'No edits' }));
+                    return;
+                }
+                const bad = incoming.find((e: any) => typeof e?.oldText !== 'string' || typeof e?.newText !== 'string');
+                if (bad) {
+                    res.writeHead(400, headers);
+                    res.end(JSON.stringify({ ok: false, error: 'Each edit needs string oldText and newText' }));
+                    return;
+                }
+                const edits: TextEditRequest[] = incoming.map((e: any, i: number) => ({
+                    n: i + 1,
+                    oldText: e.oldText,
+                    newText: e.newText,
+                    occurrenceIndex: typeof e.occurrenceIndex === 'number' ? e.occurrenceIndex : undefined
+                }));
+                const outcome = applyTextEdits(target.absolute, edits);
+                const ok = outcome.applied.length === edits.length;
+                res.writeHead(ok ? 200 : 409, headers);
+                res.end(JSON.stringify({
+                    ok,
+                    file: target.relative,
+                    applied: outcome.applied,
+                    failed: outcome.failed,
+                    error: ok ? undefined : (outcome.failed[0]?.reason || 'Save failed')
+                }));
             });
             return;
         }

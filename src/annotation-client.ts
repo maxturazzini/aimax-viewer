@@ -2100,7 +2100,7 @@ export const ANNOTATION_CLIENT_JS = `
     }
 
     // Force plain-text paste so leaves never gain child elements (which would
-    // break the text-leaf invariant applyHtmlEdits relies on).
+    // break the text-leaf invariant applyTextEdits relies on).
     function onEditPaste(e) {
         if (!active || mode !== 'edit') return;
         var el = e.target;
