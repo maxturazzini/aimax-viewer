@@ -815,9 +815,20 @@ Reply to me in language: ${userLang} (IETF BCP 47 tag).`;
     const uriHandler = vscode.window.registerUriHandler({
         handleUri(uri: vscode.Uri) {
             if (uri.path === '/openBrowser') {
-                const url = uri.query; // e.g., vscode://aimax.aimax-viewer/openBrowser?http://localhost:8080
-                if (url) {
-                    openInBrowser(url);
+                // Two accepted forms:
+                //   ?http://localhost:8080         → absolute URL, opened verbatim
+                //   ?artifacts/foo.html            → workspace-relative, resolved
+                //                                    against THIS window's serverPort
+                // The relative form is the one to write in agent instructions: a
+                // hardcoded port is wrong in every window but one (ports are
+                // per-workspace, see the hash in activate()).
+                const query = uri.query;
+                if (query) {
+                    if (/^https?:\/\//i.test(query)) {
+                        openInBrowser(query);
+                    } else {
+                        openWorkspaceRelativeInBrowser(query);
+                    }
                 }
             } else if (uri.path === '/openHome') {
                 if (workspaceFolder) {
@@ -1684,6 +1695,54 @@ function rewriteToProxy(url: string): string {
     } catch {
         return url;
     }
+}
+
+// Open a workspace-relative path in the Browser Panel, resolving it against
+// THIS window's serverPort. Lets agent instructions drop the port entirely:
+// `vscode://aimax.aimax-viewer/openBrowser?artifacts/foo.html` is correct in
+// every window, a hardcoded `127.0.0.1:3124` is correct in at most one.
+//
+// The caveat this cannot fix: with several windows open, VS Code decides which
+// one receives the vscode:// URI. If it picks the wrong workspace the path
+// resolves there — hence the explicit failure below, which names the workspace
+// it searched instead of opening a 404 or, worse, a same-named file from
+// another project.
+function openWorkspaceRelativeInBrowser(rawPath: string) {
+    const wsRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (!wsRoot) {
+        vscode.window.showWarningMessage(
+            'AIMax: no workspace open — a relative path has nothing to resolve against.'
+        );
+        return;
+    }
+    let rel = rawPath.trim();
+    try { rel = decodeURIComponent(rel); } catch { /* not encoded — use verbatim */ }
+    rel = rel.replace(/^\/+/, '');
+    // Keep ?query/#hash for the URL, drop them for the existence check.
+    const bare = rel.split('?')[0].split('#')[0];
+    if (!bare) return;
+
+    const ws = path.resolve(wsRoot);
+    const abs = path.resolve(ws, bare);
+    // path.resolve() collapses '..' first, so this containment check is also the
+    // traversal gate. The separator matters: a bare startsWith(ws) would accept a
+    // sibling directory whose name merely begins with the root's.
+    if (abs !== ws && !abs.startsWith(ws + path.sep)) {
+        vscode.window.showWarningMessage(
+            `AIMax: "${bare}" resolves outside the workspace — refusing to open it.`
+        );
+        return;
+    }
+    if (!fs.existsSync(abs)) {
+        const wsName = vscode.workspace.name || path.basename(ws);
+        vscode.window.showWarningMessage(
+            `AIMax: "${bare}" not found in workspace "${wsName}" (${ws}). ` +
+            `Note that VS Code routes vscode:// links to one window — if you have ` +
+            `several open, this may not be the workspace you meant.`
+        );
+        return;
+    }
+    openInBrowser(`http://127.0.0.1:${serverPort}/${rel}`);
 }
 
 function openInBrowser(url: string, customTitle?: string) {
@@ -4163,11 +4222,14 @@ function startHttpServer(workspaceFolder: string) {
         // API endpoint: identity (workspace name for cross-instance discovery)
         if (url === '/api/identity') {
             const workspaceName = vscode.workspace.name || path.basename(workspaceFolder);
-            res.writeHead(200, {
-                'Content-Type': 'application/json',
-                'Access-Control-Allow-Origin': '*'
-            });
-            res.end(JSON.stringify({ workspace: workspaceName }));
+            // No Access-Control-Allow-Origin here, deliberately. The only consumer
+            // is fetchWorkspaceName() in apps-manager.ts, a Node http.get that does
+            // not do CORS checks. With the header, any web page you happen to have
+            // open could scan 127.0.0.1:3124-3223 and read these replies — and
+            // `folder` is an absolute path, i.e. your username and directory
+            // layout. Readable from this machine, not from the open internet.
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ workspace: workspaceName, folder: workspaceFolder }));
             return;
         }
 

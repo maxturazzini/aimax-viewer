@@ -10,6 +10,17 @@ written under `[0.1.34]`, which had already shipped on 2026-07-25 without it, so
 the changelog credited a released version with features nobody could install.
 Dated on release._
 
+### Added — `openBrowser` accepts a workspace-relative path, so links stop carrying a port
+
+- `vscode://aimax.aimax-viewer/openBrowser?Artifacts/deck.html` now resolves against **this window's** server port. Absolute `http://…` URLs are unchanged, so every existing link keeps working — the new branch only triggers when the query has no scheme.
+- Why it was needed: the port is derived from a hash of the workspace path (`3124 + hash % 100`) so that several windows can coexist, and this machine routinely runs four. Any port written by hand into agent instructions is therefore correct in at most one window and silently wrong in the rest — pointing at another workspace's server, or at a foreign app entirely. Live Preview with `portNumber: 3123` puts its **WebSocket** on 3124, which answers `426 Upgrade Required` to anything AIMax sends it.
+- What it cannot fix: VS Code chooses which window handles a `vscode://` link. If it picks the wrong workspace the relative path resolves there, so the resolver refuses with a message naming the workspace it searched instead of quietly opening a same-named file from another project.
+
+### Changed — `/api/identity` returns the workspace folder, and no longer sends CORS
+
+- The response gains `folder` (the absolute workspace path) alongside `workspace`. Additive: the only consumer, `fetchWorkspaceName()` in `apps-manager.ts`, reads `workspace` and ignores the rest.
+- `Access-Control-Allow-Origin: *` is **removed** from that endpoint, in the same change and for its sake. The consumer is a Node `http.get`, which does not do CORS checks; the header only ever mattered to browsers. With it, any web page open in any browser could scan `127.0.0.1:3124-3223` and read the replies — and `folder` turns that from a list of workspace names into absolute paths, i.e. a username and directory layout. Now readable from this machine, not from a random tab.
+
 ---
 
 ## [0.1.35] - 2026-07-29

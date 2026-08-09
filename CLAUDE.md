@@ -258,10 +258,37 @@ All settings under `aimaxViewer.*`:
 
 ## AI Agent Integration
 
-When creating HTML/MD artifacts in `Artifacts/`, display them with:
+When creating HTML/MD artifacts in `Artifacts/`, display them with a
+**workspace-relative path — never a port**:
+
 ```bash
-open "vscode://aimax.aimax-viewer/openBrowser?http://127.0.0.1:3124/Artifacts/<filename>"
+open "vscode://aimax.aimax-viewer/openBrowser?Artifacts/<filename>"
 ```
+
+The port is per-workspace, so writing one is wrong in every window but one.
+`server.port` defaults to 3124, and that default means *"derive a unique port
+from the workspace path hash"* (`3124 + hash % 100`) precisely so several
+windows can coexist — this machine routinely runs four. A URL that hardcodes
+`127.0.0.1:3124` therefore points at whichever *other* workspace happens to own
+that number, or at a foreign app: 3124 is also where VS Code's Live Preview
+lands its WebSocket if its `portNumber` is set to 3123.
+
+Two consequences worth knowing before using the relative form:
+
+- **`3124` is the one port you cannot pin.** The port logic reads "the user
+  chose a port" as *"the value differs from the 3124 default"*, so setting
+  `aimaxViewer.server.port` to 3124 is indistinguishable from not setting it and
+  falls through to the hash. Pin a different number, or don't pin at all.
+- **VS Code decides which window receives a `vscode://` link.** With several
+  open it may not be the workspace you meant; the relative path then resolves
+  *there*. `openWorkspaceRelativeInBrowser` refuses with a message naming the
+  workspace it searched rather than opening a same-named file from another
+  project — but it cannot route the link for you.
+
+Absolute `http://…` URLs still work unchanged, for external sites and for
+targeting a specific server on purpose. To discover a running window's port,
+every AIMax server answers `GET /api/identity` with `{workspace, folder}`
+(localhost only — that endpoint deliberately sends no CORS header).
 
 Naming convention: `YYYY-MM-DD_descriptive-slug.html` or `.md`
 
