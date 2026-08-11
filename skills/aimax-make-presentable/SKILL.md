@@ -160,7 +160,7 @@ Tell the user:
 
 If the user is in VS Code with AIMax Viewer installed, also offer to open it directly:
 ```
-vscode://aimax.aimax-viewer/openBrowser?http://127.0.0.1:3124/<relative/path>
+vscode://maxturazzini.aimax-viewer/openBrowser?http://127.0.0.1:3124/<relative/path>
 ```
 
 ## Edge cases

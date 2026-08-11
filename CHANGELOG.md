@@ -4,6 +4,10 @@ All notable changes to the AIMax Viewer extension will be documented in this fil
 
 ## [0.1.37] - unreleased
 
+### Fixed — the wrong URI handler id is gone from the rest of the repo
+
+- `vscode://aimax.aimax-viewer/…` still appeared 18 times in `README.md`, `Artifacts/guide_en.md`, `Artifacts/index.html`, `Artifacts/aimax-viewer-presentation.html`, both copies of the `aimax-make-presentable` skill and a comment in `extension.ts`. These are the files agents read to build deep links, so the wrong id kept being copied into new artifacts. Only the historical changelog entries keep it, since they record what was true then.
+
 _Version in flight — new entries go here, not under a published heading. This
 header exists because they once didn't: the markdown work of 2026-07-29 was
 written under `[0.1.34]`, which had already shipped on 2026-07-25 without it, so
@@ -37,7 +41,7 @@ Dated on release._
 
 ### Fixed — the URI handler id in the docs was wrong
 
-- `CLAUDE.md` documented `vscode://aimax.aimax-viewer/…`; the published id is `maxturazzini.aimax-viewer`. With the wrong authority VS Code never reaches the handler — it reads the link as a request to install an extension by that id and answers *"cannot be installed because it was not found"*, which sends you looking in the wrong place. Still present in `README.md`, `Artifacts/guide_en.md` and `plugins/aimax-make-presentable/SKILL.md`.
+- `CLAUDE.md` documented `vscode://aimax.aimax-viewer/…`; the published id is `maxturazzini.aimax-viewer`. With the wrong authority VS Code never reaches the handler — it reads the link as a request to install an extension by that id and answers *"cannot be installed because it was not found"*, which sends you looking in the wrong place.
 
 ### Added — `openBrowser` accepts a workspace-relative path, so links stop carrying a port
 

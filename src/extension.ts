@@ -1699,7 +1699,7 @@ function rewriteToProxy(url: string): string {
 
 // Open a workspace-relative path in the Browser Panel, resolving it against
 // THIS window's serverPort. Lets agent instructions drop the port entirely:
-// `vscode://aimax.aimax-viewer/openBrowser?artifacts/foo.html` is correct in
+// `vscode://maxturazzini.aimax-viewer/openBrowser?artifacts/foo.html` is correct in
 // every window, a hardcoded `127.0.0.1:3124` is correct in at most one.
 //
 // The caveat this cannot fix: with several windows open, VS Code decides which

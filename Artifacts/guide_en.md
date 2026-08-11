@@ -176,7 +176,7 @@ Add this to your project's **CLAUDE.md** file:
 
 When creating HTML or MD files in Artifacts/, display them with:
 
-open "vscode://aimax.aimax-viewer/openBrowser?http://127.0.0.1:3124/Artifacts/FILENAME"
+open "vscode://maxturazzini.aimax-viewer/openBrowser?http://127.0.0.1:3124/Artifacts/FILENAME"
 
 Naming convention: YYYY-MM-DD_descriptive-slug.html or .md
 
@@ -187,10 +187,10 @@ IMPORTANT: Never use external browser - always use vscode:// protocol.
 
 | Action | URI |
 |--------|-----|
-| Open URL | `vscode://aimax.aimax-viewer/openBrowser?<url>` |
-| Open Home | `vscode://aimax.aimax-viewer/openHome` |
-| Open current file | `vscode://aimax.aimax-viewer/openCurrentFile` |
-| Open terminal | `vscode://aimax.aimax-viewer/openTerminal` |
+| Open URL | `vscode://maxturazzini.aimax-viewer/openBrowser?<url>` |
+| Open Home | `vscode://maxturazzini.aimax-viewer/openHome` |
+| Open current file | `vscode://maxturazzini.aimax-viewer/openCurrentFile` |
+| Open terminal | `vscode://maxturazzini.aimax-viewer/openTerminal` |
 
 ---
 

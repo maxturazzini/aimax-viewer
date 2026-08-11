@@ -1043,9 +1043,9 @@ Content-Type: application/json
             <span class="badge">EXTENSIBILITY</span>
             <h2>Built for <span class="text-lilla">AI agents</span> from day one</h2>
             <p class="lead">Every action AIMax exposes through its UI is also reachable from outside via the <code>vscode://</code> URI handler. Generate an artifact, deep-link the user straight into it.</p>
-            <pre><code>vscode://aimax.aimax-viewer/openBrowser?http://127.0.0.1:3125/Artifacts/report.html
-vscode://aimax.aimax-viewer/openHome
-vscode://aimax.aimax-viewer/openCurrentFile</code></pre>
+            <pre><code>vscode://maxturazzini.aimax-viewer/openBrowser?http://127.0.0.1:3125/Artifacts/report.html
+vscode://maxturazzini.aimax-viewer/openHome
+vscode://maxturazzini.aimax-viewer/openCurrentFile</code></pre>
             <div class="two-col" style="margin-top:18px;">
                 <div>
                     <h3 class="text-sky">Convention for AI agents</h3>
@@ -1070,7 +1070,7 @@ vscode://aimax.aimax-viewer/openCurrentFile</code></pre>
             for humans, but the same actions are reachable from any agent through the
             `vscode://` URI handler. After Claude generates an artifact and writes it
             to disk, the convention is to immediately open it in AIMax with a
-            `vscode://aimax.aimax-viewer/openBrowser?...` URL — the user sees the
+            `vscode://maxturazzini.aimax-viewer/openBrowser?...` URL — the user sees the
             output in the viewer, not in their default external browser. Naming
             convention: `Artifacts/YYYY-MM-DD_slug.html` keeps the folder
             chronological. The two skills bundle the most common follow-up actions —

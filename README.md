@@ -206,8 +206,8 @@ This now works out-of-the-box in permissive mode!
 Deep links for use in HTML artifacts or external tools:
 
 ```
-vscode://aimax.aimax-viewer/openBrowser?http://localhost:8080
-vscode://aimax.aimax-viewer/openHome
+vscode://maxturazzini.aimax-viewer/openBrowser?http://localhost:8080
+vscode://maxturazzini.aimax-viewer/openHome
 ```
 
 ## Installation
@@ -270,17 +270,17 @@ AIMax Viewer exposes commands via `vscode://` URI protocol, enabling any AI agen
 
 **1. Show an HTML artifact:**
 ```bash
-open "vscode://aimax.aimax-viewer/openBrowser?http://127.0.0.1:3124/Artifacts/2026-01-10_report.html"
+open "vscode://maxturazzini.aimax-viewer/openBrowser?http://127.0.0.1:3124/Artifacts/2026-01-10_report.html"
 ```
 
 **2. Show a Markdown file (auto-converted to HTML):**
 ```bash
-open "vscode://aimax.aimax-viewer/openBrowser?http://127.0.0.1:3124/Artifacts/analysis.md"
+open "vscode://maxturazzini.aimax-viewer/openBrowser?http://127.0.0.1:3124/Artifacts/analysis.md"
 ```
 
 **3. Show a local dev server:**
 ```bash
-open "vscode://aimax.aimax-viewer/openBrowser?http://localhost:5173"
+open "vscode://maxturazzini.aimax-viewer/openBrowser?http://localhost:5173"
 ```
 
 ### Configuration for Claude Code
@@ -290,7 +290,7 @@ Add to your project's `CLAUDE.md`:
 > **Artifact Viewer**
 >
 > When creating HTML or MD files in Artifacts/, display them with:
-> `open "vscode://aimax.aimax-viewer/openBrowser?http://127.0.0.1:3124/Artifacts/<filename>"`
+> `open "vscode://maxturazzini.aimax-viewer/openBrowser?http://127.0.0.1:3124/Artifacts/<filename>"`
 >
 > Naming convention: `YYYY-MM-DD_descriptive-slug.html` or `.md`
 >
