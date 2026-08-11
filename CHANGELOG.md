@@ -6,7 +6,7 @@ All notable changes to the AIMax Viewer extension will be documented in this fil
 
 ### Fixed — the wrong URI handler id is gone from the rest of the repo
 
-- `vscode://aimax.aimax-viewer/…` still appeared 18 times in `README.md`, `Artifacts/guide_en.md`, `Artifacts/index.html`, `Artifacts/aimax-viewer-presentation.html`, both copies of the `aimax-make-presentable` skill and a comment in `extension.ts`. These are the files agents read to build deep links, so the wrong id kept being copied into new artifacts. Only the historical changelog entries keep it, since they record what was true then.
+- `vscode://aimax.aimax-viewer/…` still appeared 19 times in `README.md`, `Artifacts/guide_en.md`, `Artifacts/index.html`, `Artifacts/aimax-viewer-presentation.html`, both copies of the `aimax-make-presentable` skill and a comment in `extension.ts`. These are the files agents read to build deep links, so the wrong id kept being copied into new artifacts. Only the historical changelog entries keep it, since they record what was true then.
 
 _Version in flight — new entries go here, not under a published heading. This
 header exists because they once didn't: the markdown work of 2026-07-29 was
