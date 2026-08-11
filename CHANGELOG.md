@@ -2,17 +2,36 @@
 
 All notable changes to the AIMax Viewer extension will be documented in this file.
 
-## [0.1.36] - unreleased
+## [0.1.36] - 2026-08-11
 
-_Version in flight — new entries go here, not under a published heading. This
-header exists because they once didn't: the markdown work of 2026-07-29 was
-written under `[0.1.34]`, which had already shipped on 2026-07-25 without it, so
-the changelog credited a released version with features nobody could install.
-Dated on release._
+### Added — Mermaid diagrams render in the `.md` preview
+
+- A ` ```mermaid ` fence is no longer shown as source: it renders as a diagram, with `−` / `+` / `1:1` zoom controls and a fullscreen button on each one. Everything else about code fences is unchanged.
+- **Zoom resizes the SVG instead of using `transform: scale()`.** A scaled element keeps its original box, so the container would have nothing to scroll and a magnified process diagram would be magnified but unexplorable. Resizing makes the scrollbars appear on their own.
+- **Fullscreen is a CSS overlay, not the Fullscreen API.** The markdown page is served into an iframe, where `requestFullscreen()` needs an `allow` attribute on the frame that the page cannot set — it would have failed silently.
+- Diagrams keep their natural width rather than being scaled down to the column (`useMaxWidth: false` for every diagram type). A 2000px process diagram squeezed into 860px has unreadable labels; scrolling sideways is the better trade.
+- A diagram that does not parse **falls back to showing its source**. `mermaid.parse()` runs before `mermaid.run()` because `suppressErrors` alone still swaps in mermaid's own "Syntax error" box, and for a hand-written diagram seeing what you typed is more useful.
+- `securityLevel: 'strict'` (mermaid's default, set explicitly): labels go through DOMPurify and the `click` directive is disabled, so a diagram cannot call into the page's JS.
+- **Edit mode is off inside a rendered diagram**, annotations still work. The labels are real HTML elements and their text exists verbatim in the `.md` inside the fence, so an anchored replace would rewrite the diagram source under a view still showing the old render. The gate is a `data-aimax-noedit` ancestor check in the annotation client.
+- The 3.5 MB mermaid bundle is vendored in `assets/`, served from `/__aimax/mermaid.min.js`, and **loaded only for documents that contain a diagram**. No CDN, so it works offline and needs no CSP change. The packaged VSIX grows from 0.3 MB to 1.23 MB.
+
+### Fixed — rendered markdown is sanitized, so a `.md` can no longer run script
+
+- `parseMarkdown` passed author HTML through untouched, so `<img src=x onerror=…>` in a `.md` executed. The output now goes through an allowlist sanitizer (`src/sanitize-html.ts`).
+- **Why this was worse than ordinary XSS:** the page is served on the AIMax origin, which also answers `POST /__save-md`, `/__save-notes` and `/__claude` — the last one accepts `allowEdits: true`. Script in a preview could write into the workspace and drive the Claude bridge. Markdown is increasingly written by agents from external material, so "it is a local file" is not a reason to trust it.
+- Every tag is **rebuilt from scratch** from an allowlist of names and attributes rather than cleaned in place; nothing of the original tag text survives, and anything that does not parse as a well-formed tag is escaped into text. That is what closes `<scr<script>ipt>` and entity-smuggled `jav&#x61;script:` without enumerating them.
+- **Measured before shipping**, because an allowlist that breaks real documents is not a security win: across a 3623-file corpus, 2513 files render byte-identical, 1109 differ in HTML but show the same text or *more* (prose like `<nome utente>` that the browser used to swallow as an unknown tag is now visible), and **1** loses text — an archived file whose HTML was already malformed. Kept: `details`/`summary`, `style`, `class`, tables, images, relative and `vscode:` links. Dropped: script/style/iframe/object/svg with their contents, every `on*` handler, `javascript:`/`vbscript:`/`data:text` URLs, and forged `data-aimax-*` attributes.
+- Sanitization runs **before** code fences are restored from their placeholders, so documentation that shows HTML stays intact and escaped.
+- `target="_blank"` links now get `rel="noopener noreferrer"`.
+- Covered by 36 XSS payloads asserted **in a real browser DOM**, not by string matching — two payloads survive as inert visible text, which a regex cannot tell apart from a live tag.
+
+### Fixed — the URI handler id in the docs was wrong
+
+- `CLAUDE.md` documented `vscode://aimax.aimax-viewer/…`; the published id is `maxturazzini.aimax-viewer`. With the wrong authority VS Code never reaches the handler — it reads the link as a request to install an extension by that id and answers *"cannot be installed because it was not found"*, which sends you looking in the wrong place. Still present in `README.md`, `Artifacts/guide_en.md` and `plugins/aimax-make-presentable/SKILL.md`.
 
 ### Added — `openBrowser` accepts a workspace-relative path, so links stop carrying a port
 
-- `vscode://aimax.aimax-viewer/openBrowser?Artifacts/deck.html` now resolves against **this window's** server port. Absolute `http://…` URLs are unchanged, so every existing link keeps working — the new branch only triggers when the query has no scheme.
+- `vscode://maxturazzini.aimax-viewer/openBrowser?Artifacts/deck.html` now resolves against **this window's** server port. Absolute `http://…` URLs are unchanged, so every existing link keeps working — the new branch only triggers when the query has no scheme.
 - Why it was needed: the port is derived from a hash of the workspace path (`3124 + hash % 100`) so that several windows can coexist, and this machine routinely runs four. Any port written by hand into agent instructions is therefore correct in at most one window and silently wrong in the rest — pointing at another workspace's server, or at a foreign app entirely. Live Preview with `portNumber: 3123` puts its **WebSocket** on 3124, which answers `426 Upgrade Required` to anything AIMax sends it.
 - What it cannot fix: VS Code chooses which window handles a `vscode://` link. If it picks the wrong workspace the relative path resolves there, so the resolver refuses with a message naming the workspace it searched instead of quietly opening a same-named file from another project.
 

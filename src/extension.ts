@@ -4307,6 +4307,28 @@ function startHttpServer(workspaceFolder: string) {
             return;
         }
 
+        // Serve vendored assets (mermaid) from the extension bundle. Fixed
+        // filenames only — this must never become a path the client chooses.
+        if (url.startsWith('/__aimax/')) {
+            const asset = url.slice('/__aimax/'.length).split('?')[0];
+            const vendored: Record<string, string> = { 'mermaid.min.js': 'mermaid.min.js' };
+            const file = vendored[asset];
+            if (file) {
+                const assetPath = path.join(extensionContext.extensionPath, 'assets', file);
+                if (fs.existsSync(assetPath)) {
+                    res.writeHead(200, {
+                        'Content-Type': 'application/javascript; charset=utf-8',
+                        'Cache-Control': 'public, max-age=86400'
+                    });
+                    res.end(fs.readFileSync(assetPath));
+                    return;
+                }
+            }
+            res.writeHead(404);
+            res.end('Not found');
+            return;
+        }
+
         // Handle root path: redirect to /Artifacts/index.html
         if (url === '/' || url === '') {
             res.writeHead(302, {

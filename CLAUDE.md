@@ -243,7 +243,12 @@ filesystem path. The `.bak` backup and ambiguity gates come for free.
 
 ### Extension Points
 
-- **URI Handler**: `vscode://aimax.aimax-viewer/openBrowser?<url>` for deep linking
+- **URI Handler**: `vscode://maxturazzini.aimax-viewer/openBrowser?<url>` for deep
+  linking. The authority is the **published extension id** (`publisher.name` from
+  `package.json`), not the display name: with any other value VS Code does not
+  reach the handler at all, it reads the link as a request to install an
+  extension by that id and answers *"cannot be installed because it was not
+  found"*. Nothing opens and nothing warns you that the URL was fine.
 - **Context Menu**: "Open in AIMax Viewer" for HTML files in explorer
 - **Sidebar**: TreeView panel with artifacts organized by configured folders
 
@@ -262,7 +267,7 @@ When creating HTML/MD artifacts in `Artifacts/`, display them with a
 **workspace-relative path — never a port**:
 
 ```bash
-open "vscode://aimax.aimax-viewer/openBrowser?Artifacts/<filename>"
+open "vscode://maxturazzini.aimax-viewer/openBrowser?Artifacts/<filename>"
 ```
 
 The port is per-workspace, so writing one is wrong in every window but one.

@@ -1,5 +1,7 @@
 // Simple Markdown to HTML parser
 
+import { sanitizeHtml } from './sanitize-html';
+
 // Frontmatter extraction result interface
 export interface FrontmatterResult {
     content: string;      // Markdown without frontmatter
@@ -148,6 +150,23 @@ export function parseMarkdown(md: string): string {
             .replace(/"/g, '&quot;');
         const langClass = lang ? ` class="language-${lang}"` : '';
         const copyIcon = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>';
+
+        // A ```mermaid fence becomes a render target instead of a code block.
+        // It stays inside the placeholder machinery for two reasons: the diagram
+        // source must not meet the inline regexes (it is full of --, -->, * and
+        // |), and it must not meet the sanitizer either — the escaped text is
+        // already inert, and mermaid reads it back through textContent.
+        //
+        // data-aimax-noedit keeps Edit mode off the rendered SVG. The labels are
+        // real HTML elements and their text ("READY 1") exists verbatim in the
+        // source inside this fence, so an anchored replace would happily rewrite
+        // the diagram from under a view that is no longer showing the source.
+        if (lang.toLowerCase() === 'mermaid') {
+            const html = `<div class="mermaid-block" data-aimax-noedit="1"><pre class="mermaid">${escaped}</pre></div>`;
+            codeBlocks.push(html);
+            return `<!--CODEBLOCK${codeBlocks.length - 1}-->`;
+        }
+
         const html = `<div class="code-block-wrapper"><button class="copy-btn" onclick="copyCode(this)" title="Copy code">${copyIcon}</button><pre><code${langClass}>${escaped}</code></pre></div>`;
         codeBlocks.push(html);
         return `<!--CODEBLOCK${codeBlocks.length - 1}-->`;
@@ -194,6 +213,14 @@ export function parseMarkdown(md: string): string {
         .replace(/<!--SPACER-->/g, '<div style="height: 1.5em;"></div>')
         .replace(/<p><!--SPACER--><\/p>/g, '<div style="height: 1.5em;"></div>');
 
+    // Sanitize BEFORE restoring code blocks: at this point the code blocks are
+    // still placeholders, so their (already escaped) contents never reach the
+    // sanitizer, and the copy button keeps the inline onclick the sanitizer
+    // would otherwise strip. Everything that is here now is either markup this
+    // parser generated or raw HTML the author wrote — and the second kind is
+    // exactly what needs an allowlist.
+    html = sanitizeHtml(html);
+
     // Restore code blocks from placeholders
     codeBlocks.forEach((block, i) => {
         html = html.replace(`<!--CODEBLOCK${i}-->`, block);
@@ -206,6 +233,108 @@ export function parseMarkdown(md: string): string {
 export function wrapMarkdownHtml(content: string, title: string, metadata?: Record<string, unknown> | null): string {
     const metadataScript = metadata
         ? `<script id="frontmatter" type="application/json">${JSON.stringify(metadata)}</script>`
+        : '';
+
+    // 3.5 MB of mermaid is only worth loading for a document that has diagrams.
+    // The path is root-relative on purpose: the only caller whose output can
+    // contain a mermaid block is the HTTP server, which serves the page from the
+    // same origin that answers /__aimax/. (The Changelog panel also calls this,
+    // but with enableScripts: false, so nothing loads there either way.)
+    const mermaidScript = content.includes('class="mermaid"')
+        ? `<script src="/__aimax/mermaid.min.js"></script>
+    <script>
+        (function () {
+            if (!window.mermaid) return;
+
+            // useMaxWidth would scale a 2000px process diagram down to the
+            // column width and make its labels unreadable. Natural size plus the
+            // horizontal scroll on .mermaid-block is the readable trade. The key
+            // is per diagram type, so it is set for all of them rather than for
+            // the two that came to mind.
+            var natural = {};
+            ['flowchart', 'sequence', 'class', 'state', 'er', 'journey', 'gantt', 'pie',
+             'requirement', 'gitGraph', 'c4', 'mindmap', 'timeline', 'quadrantChart',
+             'sankey', 'xyChart', 'block', 'packet', 'architecture'
+            ].forEach(function (k) { natural[k] = { useMaxWidth: false }; });
+
+            // securityLevel 'strict' is mermaid's default and the line that
+            // matters here: it runs labels through DOMPurify and disables the
+            // click directive, which would otherwise let a diagram call into
+            // this page's JS.
+            mermaid.initialize(Object.assign({
+                startOnLoad: false, securityLevel: 'strict', theme: 'base',
+                themeVariables: { primaryColor: '#eef2ff', primaryBorderColor: '#0052FF', lineColor: '#6b7280', fontFamily: 'Inter, -apple-system, sans-serif' }
+            }, natural));
+            // Zoom works by resizing the svg, not by transform: scale(). A
+            // scaled element keeps its original box, so the container would have
+            // nothing to scroll — and scrollbars are the point of zooming into a
+            // wide process diagram.
+            function addControls(block, svg) {
+                if (!block || !svg || block.querySelector('.mermaid-tools')) return;
+
+                var w = parseFloat(svg.getAttribute('width')) || svg.getBoundingClientRect().width;
+                var h = parseFloat(svg.getAttribute('height')) || svg.getBoundingClientRect().height;
+                if (!w || !h) return;
+                var zoom = 1;
+
+                function apply() {
+                    svg.style.maxWidth = 'none';
+                    svg.style.width = (w * zoom) + 'px';
+                    svg.style.height = (h * zoom) + 'px';
+                }
+
+                function make(label, title, onClick) {
+                    var b = document.createElement('button');
+                    b.type = 'button';
+                    b.textContent = label;
+                    b.title = title;
+                    b.addEventListener('click', function (ev) { ev.preventDefault(); ev.stopPropagation(); onClick(); });
+                    return b;
+                }
+
+                function full(on) {
+                    block.classList.toggle('is-full', on);
+                    document.body.style.overflow = on ? 'hidden' : '';
+                    fullBtn.textContent = on ? '✕' : '⛶';
+                    fullBtn.title = on ? 'Chiudi (Esc)' : 'Schermo intero';
+                }
+
+                var fullBtn = make('⛶', 'Schermo intero', function () {
+                    full(!block.classList.contains('is-full'));
+                });
+
+                var tools = document.createElement('div');
+                tools.className = 'mermaid-tools';
+                tools.appendChild(make('−', 'Riduci', function () { zoom = Math.max(0.25, zoom - 0.25); apply(); }));
+                tools.appendChild(make('+', 'Ingrandisci', function () { zoom = Math.min(6, zoom + 0.25); apply(); }));
+                tools.appendChild(make('1:1', 'Dimensione originale', function () { zoom = 1; apply(); }));
+                tools.appendChild(fullBtn);
+                block.insertBefore(tools, block.firstChild);
+
+                document.addEventListener('keydown', function (ev) {
+                    if (ev.key === 'Escape' && block.classList.contains('is-full')) full(false);
+                });
+            }
+
+            var blocks = Array.prototype.slice.call(document.querySelectorAll('pre.mermaid'));
+            blocks.forEach(function (el) {
+                var source = el.textContent;
+                // parse() first, then run(). suppressErrors on run() is not
+                // enough: mermaid still swaps in its own "Syntax error" SVG, and
+                // for a hand-written diagram the source is the more useful
+                // failure state — you can see what you typed wrong.
+                mermaid.parse(source, { suppressErrors: true }).then(function (ok) {
+                    if (!ok) return;
+                    return mermaid.run({ nodes: [el], suppressErrors: true }).then(function () {
+                        addControls(el.parentElement, el.querySelector('svg'));
+                    });
+                }).catch(function () {
+                    el.textContent = source;
+                    el.removeAttribute('data-processed');
+                });
+            });
+        })();
+    </script>`
         : '';
 
     return `<!DOCTYPE html>
@@ -442,6 +571,85 @@ export function wrapMarkdownHtml(content: string, title: string, metadata?: Reco
             margin: 20px 0;
         }
 
+        .mermaid-block {
+            position: relative;
+            margin: 24px 0;
+            text-align: center;
+            overflow: auto;
+        }
+
+        .mermaid-tools {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            display: flex;
+            gap: 4px;
+            z-index: 2;
+            /* Discreet but always there: hidden-until-hover controls are
+               controls most people never find. */
+            opacity: 0.35;
+            transition: opacity 0.15s;
+        }
+
+        .mermaid-block:hover .mermaid-tools,
+        .mermaid-block.is-full .mermaid-tools { opacity: 1; }
+
+        .mermaid-tools button {
+            min-width: 28px;
+            height: 28px;
+            padding: 0 6px;
+            border: 1px solid #e5e7eb;
+            border-radius: 6px;
+            background: var(--white);
+            color: var(--dim-gray);
+            font-size: 14px;
+            line-height: 1;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .mermaid-tools button:hover { border-color: var(--blue); color: var(--blue); }
+
+        /* Fullscreen is an overlay, not the Fullscreen API: this page is served
+           into an iframe, where requestFullscreen needs an allow attribute on the
+           frame that we do not control. A fixed overlay always works. */
+        .mermaid-block.is-full {
+            position: fixed;
+            inset: 0;
+            margin: 0;
+            z-index: 9999;
+            background: var(--white);
+            padding: 48px 12px 12px;
+            overflow: auto;
+        }
+
+        /* The scroll lives here, stated explicitly: without it the diagram would
+           still scroll, but only because the generic rule for code blocks
+           happens to set overflow — a coincidence a later edit could remove. The
+           max-height keeps a zoomed diagram from pushing the rest of the page
+           out of reach. */
+        .mermaid-block pre.mermaid {
+            margin: 0;
+            background: none;
+            overflow: auto;
+            max-height: 85vh;
+        }
+
+        .mermaid-block.is-full pre.mermaid { max-height: none; }
+
+        /* Until mermaid has run (or if it failed) the source is shown as code. */
+        .mermaid-block pre.mermaid:not([data-processed]) {
+            background: var(--light-gray);
+            border-radius: 12px;
+            padding: 16px;
+            text-align: left;
+            font-family: 'SF Mono', Monaco, monospace;
+            font-size: 13px;
+            white-space: pre;
+        }
+
         @media (max-width: 768px) {
             .content-section {
                 padding: 20px 16px;
@@ -465,6 +673,7 @@ export function wrapMarkdownHtml(content: string, title: string, metadata?: Reco
     <div class="content-section">
         ${content}
     </div>
+    ${mermaidScript}
     <script>
         const copyIconSvg = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>';
         const checkIconSvg = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="3"><path d="M20 6L9 17l-5-5"/></svg>';

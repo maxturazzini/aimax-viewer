@@ -262,6 +262,18 @@ export const ANNOTATION_CLIENT_JS = `
         return false;
     }
 
+    // Opt-out marker for rendered content whose DOM is not the source: the text
+    // in a mermaid SVG also exists inside the mermaid fence in the .md, so an
+    // anchored replace would land in the diagram source while the view still
+    // shows the old render. Annotations stay allowed — only editing is off.
+    function isNoEditZone(el) {
+        while (el && el !== document.body) {
+            if (el.hasAttribute && el.hasAttribute('data-aimax-noedit')) return true;
+            el = el.parentNode;
+        }
+        return false;
+    }
+
     function hasElementChildren(el) {
         if (!el || !el.childNodes) return false;
         for (var i = 0; i < el.childNodes.length; i++) {
@@ -303,6 +315,7 @@ export const ANNOTATION_CLIENT_JS = `
     function isEditableLeaf(el) {
         if (!el || el.nodeType !== 1) return false;
         if (isOverlay(el)) return false;
+        if (isNoEditZone(el)) return false;
         if (hasElementChildren(el)) return false;
         if (!(el.textContent || '').trim()) return false;
         if (notesActive && !isInsideSpeakerNotes(el)) return false;
@@ -377,6 +390,7 @@ export const ANNOTATION_CLIENT_JS = `
         for (var j = 0; j < candidates.length; j++) {
             var el = candidates[j];
             if (isOverlay(el)) continue;
+            if (isNoEditZone(el)) continue;   // also covers the mixed-element branch below
             if (notesActive && !isInsideSpeakerNotes(el)) continue;
             if (isEditableLeaf(el)) {
                 // Pure-text leaf: edit the element directly.
