@@ -48,7 +48,10 @@ export function generateCSP(): string {
     const httpHosts = config.cspAllowedHttpHosts || [];
     const httpScheme = httpHosts.map(h => `http://${h}:*`).join(' ');
     const extra = [httpsScheme, httpScheme].filter(Boolean).join(' ');
-    const frameSrc = ['http://127.0.0.1:*', 'http://localhost:*', httpScheme].filter(Boolean).join(' ');
+    // Kept byte-identical to the live copy in extension.ts (see the long note
+    // there): nothing imports this module today, so a divergence here would be
+    // invisible until someone wires it up and inherits the old bug.
+    const frameSrc = ['http://127.0.0.1:*', 'http://localhost:*', httpsScheme, httpScheme].filter(Boolean).join(' ');
 
     return `default-src 'self' http://127.0.0.1:* http://localhost:* ${extra}; frame-src 'self' ${frameSrc}; script-src 'self' 'unsafe-inline' http://127.0.0.1:* http://localhost:* ${extra}; style-src 'self' 'unsafe-inline' http://127.0.0.1:* http://localhost:* ${extra}; img-src 'self' data: http://127.0.0.1:* http://localhost:* ${extra}; font-src 'self' data: http://127.0.0.1:* http://localhost:* ${extra}; connect-src 'self' http://127.0.0.1:* http://localhost:* ${extra};`;
 }

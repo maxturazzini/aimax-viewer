@@ -4,9 +4,47 @@ All notable changes to the AIMax Viewer extension will be documented in this fil
 
 ## [0.1.37] - unreleased
 
+### Added — Export as PDF
+
+- **`Export as PDF…`** in the Browser panel's hamburger menu, right after `Open Current Editor File`; also on the explorer right-click for `.html` and `.md`, and as `AIMax Viewer: Export as PDF` in the command palette. Pick where to save, and the rendered page — Markdown preview or HTML artifact — becomes a PDF.
+- **It renders with the Chromium-family browser you already have** (`chrome --headless=new --print-to-pdf`), autodetecting Chrome, Edge, Chromium and Brave. Nothing is added to the VSIX, it works offline, and the output is real vector text that honours the page's own `@media print` rules. With no browser found it says so and offers to open the page in your browser, where you can still print by hand.
+- Two settings: `aimaxViewer.pdf.browserPath` to point at a browser in an unusual place (an explicit path that does not exist is reported, not silently replaced), and `aimaxViewer.pdf.waitMs` (default 10000) for how long the page's own scripts may run before the snapshot — raise it if a document with heavy Mermaid diagrams prints half-drawn, since that budget is not a wait-for-idle.
+- **Why it is done on the host and not in the panel.** An `exportPdf()` using html2pdf.js has been sitting in the panel script since 0.1.x, wired to no button, and it could never have worked: the document lives in a cross-origin iframe (`http://127.0.0.1:<port>` inside a `vscode-webview://` page), so `frame.contentDocument` and `frame.contentWindow.print()` both throw and html2canvas has nothing to rasterize. VS Code exposes no print API to a webview either. What the panel *does* have is the URL, and a browser will print a URL by itself. The CDN load of html2pdf.js goes away with it.
+- **`--user-data-dir` is deliberately not passed.** A throwaway profile is the tidy-looking choice and it broke the first version: Chrome writes the PDF and then never exits, so every export hung until the timeout (measured: 3.5s without it, still running at 25s with). Sharing the default profile was verified safe with the user's own Chrome open and holding the profile lock.
+- Known limit: a deck exports one slide per page but on portrait A4, so a 16:9 slide is letterboxed. Orientation has to come from the page (`@page { size: A4 landscape }`) — the CLI has no flag for it.
+
+### Changed — the two browser panels now share one message handler
+
+- `openInBrowser` has two paths: multi-tab creates a panel per URL, single-tab reuses `browserPanel`. Each carried **its own copy** of the same forty-line `if/else` over the panel's messages, and the copies had drifted apart by exactly one branch: `Export as PDF…` was wired into the single-tab copy only, so in a multi-tab window the menu item did nothing at all — an unrecognised command is ignored without an error, so there was nothing to see, not even in the console.
+- Both are now one `handleBrowserPanelMessage(message, getPanel)`. Verified against a normalised diff of the two blocks first: they were identical apart from that branch and two `if (panel)` guards. The panel is passed as a getter because `browserPanel` is a mutable global that `onDidDispose` sets back to `undefined`, and the async Claude-bridge callback has to see that rather than close over a stale value.
+- Worth knowing: this is the same duplication trap [TODO.md](TODO.md) records for Home vs Browser ("every new feature must be ported to both"). One copy fewer to forget.
+
+### Fixed — `Open this Folder in a New Window` on a symlinked folder opened the link, not the folder
+
+- The guard was a single `statSync().isDirectory()`, and **`statSync` follows symlinks**: a link to a folder answers "yes, a directory", so the check passed and `vscode.openFolder` was handed the link's own path. The new window then opened *rooted at the link* — which lives inside the current repo — so the workspace root, the file tree, the AIMax server's port hash and every workspace-relative path resolved under the wrong project. Nothing errored; it just was not the folder that had been right-clicked.
+- Now `lstatSync().isSymbolicLink()` spots the link first and `realpathSync` resolves it, and the resolved path is what is both checked and opened (`vscode.Uri.file(target)`, not the original `uri`). A non-symlink folder takes exactly the path it took before.
+
+### Fixed — the Mermaid zoom controls are no longer printed
+
+- The `−` / `+` / `1:1` / fullscreen buttons on a diagram were showing up in print and in the exported PDF, floating over the diagram's top-right corner. They are screen furniture and are now hidden in `@media print`.
+
+### Fixed — a rendered mermaid diagram no longer comes out in monospace with its labels cut off
+
+- A diagram whose own `%%{init}%%` carries `themeVariables` rendered in Menlo instead of Inter, and long labels lost their tail: `Il tuo cliente` was painted as `Il tuo cli`. One line of mermaid explains both. `sanitizeDirective` validates every themeVariable value against `/^[\d "#%(),.;A-Za-z]+$/` — a character class with **no hyphen** — so the perfectly ordinary `'Inter, Helvetica, Arial, sans-serif'` fails it and is replaced with `""`. With an empty `fontFamily` mermaid then emits no `font-family` anywhere in the diagram's stylesheet (its own `--mermaid-font-family` fallback is scoped to `#mermaid-N :root`, which can never match), so the labels inherit from the `<pre>` they live in — and a `<pre>` is monospace by user-agent default.
+- **The clipping is the same cause seen from the other side.** Mermaid renders the copy it *measures* into a temporary div **inside** the target element and bakes the measured width into `foreignObject@width`; a `foreignObject` clips its content. Measure in one font, paint in another, and the label is cut to the width of the font mermaid thought it was using.
+- Fixed with one declaration: `.mermaid-block pre.mermaid svg { font-family: … }`. On the `svg` because that is the level mermaid declares its own font at (`#mermaid-N{font-family}` is an id selector, so a diagram that *did* get a font still wins — this is a floor, not an override), and inside the `<pre>` so the measuring copy is covered too. Measured across flowchart, sequence, gantt, pie, timeline, class and state, with both `htmlLabels` settings: every label in Inter and **0px of clipping**, against up to 60px before. Declaring it on the `<pre>` instead is not equivalent — the font comes out right but 9–13px of clipping survives, because at measure time mermaid's own stylesheet outranks anything the labels merely inherit.
+- Unchanged on purpose: the source view (`pre.mermaid:not([data-processed])`) is still monospace, both before mermaid runs and when a diagram fails to parse, and the gantt date axis keeps the `sans-serif` that mermaid explicitly emits for it.
+- Worth knowing when writing diagrams: because of that hyphen rule, a document's own `fontFamily` is only honoured when it contains no hyphen. `'Inter, Helvetica, Arial'` survives; `'Inter, sans-serif'` and `'Inter, -apple-system, …'` are silently discarded.
+
 ### Fixed — the wrong URI handler id is gone from the rest of the repo
 
 - `vscode://aimax.aimax-viewer/…` still appeared 19 times in `README.md`, `Artifacts/guide_en.md`, `Artifacts/index.html`, `Artifacts/aimax-viewer-presentation.html`, both copies of the `aimax-make-presentable` skill and a comment in `extension.ts`. These are the files agents read to build deep links, so the wrong id kept being copied into new artifacts. Only the historical changelog entries keep it, since they record what was true then.
+
+### Fixed — `csp.allowedDomains` now allows the domain in an iframe too, not just as a script or an image
+
+- `frame-src` was assembled from the localhost defaults plus `csp.allowedHttpHosts`, and never carried the https domains of `csp.allowedDomains`. An explicit `frame-src` overrides the fallback to `default-src` — where those domains *were* listed — so an allowed domain received script, style, img, font and connect, and was refused as a frame. `openBrowser?https://<allowed-domain>/…` opened a blank Browser panel; the reason existed only as a `Refused to frame` line in the webview console, and no setting could have unblocked it. A setting that half-applies is worse than one that isn't there, because you go looking for the mistake in your own configuration.
+- Found while opening `https://academy.aimax.it/admin` in the panel. The site frames fine — it sends neither `X-Frame-Options` nor `frame-ancestors` — so the refusal was entirely ours, and everything upstream already worked: the URI handler accepted the nested `?tab=…` query, and `rewriteToProxy` correctly left a non-localhost host alone.
+- `generateCSP()` exists twice: in `extension.ts` (the live one, three call sites) and in `config.ts`, which nothing imports. Both were changed, so wiring up `config.ts` later cannot quietly reintroduce the bug.
 
 _Version in flight — new entries go here, not under a published heading. This
 header exists because they once didn't: the markdown work of 2026-07-29 was

@@ -637,6 +637,32 @@ export function wrapMarkdownHtml(content: string, title: string, metadata?: Reco
             max-height: 85vh;
         }
 
+        /* The font the diagram falls back to when mermaid declares none, which
+           happens whenever a document's own %%{init}%% carries themeVariables:
+           mermaid's sanitizeDirective whitelists every themeVariable value
+           against /^[\\d "#%(),.;A-Za-z]+$/ — no hyphen in that class — so the
+           usual 'Inter, Helvetica, Arial, sans-serif' fails it and is replaced
+           with "". With an empty fontFamily mermaid emits no font-family at
+           all (its own --mermaid-font-family fallback is scoped to
+           '#mermaid-N :root', which matches nothing), the labels inherit from
+           the <pre> they live in, and a <pre> is monospace by user-agent
+           default: the diagram comes out in Menlo.
+
+           Declared on the svg, not on the <pre>, for two reasons. It is the
+           level mermaid declares its own font at ('#mermaid-N{font-family}',
+           an id selector, so a diagram that did get a font keeps it — this is
+           a floor, not an override). And mermaid renders the copy it *measures*
+           into a temp div inside the target element, so a font the labels only
+           pick up outside that copy sizes the boxes with one font and paints
+           them with another — a foreignObject clips its content, which is what
+           cut "Il tuo cliente" down to "Il tuo cli". Measured: on the <pre> the
+           labels do come out in Inter but 9-13px of clipping survives; here it
+           is 0 across flowchart, sequence, gantt, pie, timeline, class and
+           state, with both htmlLabels settings. */
+        .mermaid-block pre.mermaid svg {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        }
+
         .mermaid-block.is-full pre.mermaid { max-height: none; }
 
         /* Until mermaid has run (or if it failed) the source is shown as code. */
@@ -657,6 +683,10 @@ export function wrapMarkdownHtml(content: string, title: string, metadata?: Reco
         }
 
         @media print {
+            /* The diagram's zoom controls are screen furniture; they were coming
+               out in the PDF, floating over the top-right corner of every
+               diagram. */
+            .mermaid-tools { display: none !important; }
             body {
                 background: white;
                 -webkit-print-color-adjust: exact;

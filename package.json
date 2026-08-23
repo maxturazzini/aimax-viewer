@@ -39,6 +39,10 @@
         "title": "Open in AIMax Viewer"
       },
       {
+        "command": "aimaxViewer.exportPdf",
+        "title": "AIMax Viewer: Export as PDF"
+      },
+      {
         "command": "aimaxViewer.openTerminal",
         "title": "AIMax Viewer: Open New Terminal",
         "icon": "$(terminal)"
@@ -171,6 +175,11 @@
         {
           "command": "aimaxViewer.presentFile",
           "when": "!explorerResourceIsFolder && resourceExtname == .html",
+          "group": "navigation"
+        },
+        {
+          "command": "aimaxViewer.exportPdf",
+          "when": "!explorerResourceIsFolder && (resourceExtname == .html || resourceExtname == .md)",
           "group": "navigation"
         },
         {
@@ -473,6 +482,16 @@
             ]
           },
           "description": "List of apps to manage. Configure here or use auto-discovery."
+        },
+        "aimaxViewer.pdf.browserPath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Path to the Chromium-family browser used to render PDFs. Empty means autodetect (Chrome, Edge, Chromium, Brave). Set this when the browser lives somewhere unusual — an explicit path that does not exist is reported as an error rather than falling back."
+        },
+        "aimaxViewer.pdf.waitMs": {
+          "type": "number",
+          "default": 10000,
+          "markdownDescription": "How long the renderer may let the page's own scripts run before the PDF is taken (`--virtual-time-budget`). This is a budget, not a wait-for-idle: raise it if a document with heavy Mermaid diagrams prints half-drawn."
         }
       }
     }

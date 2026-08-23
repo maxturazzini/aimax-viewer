@@ -230,9 +230,17 @@ function generateCSP(): string {
     const httpScheme = httpHosts.map(h => `http://${h}:*`).join(' ');
     const extra = [httpsScheme, httpScheme].filter(Boolean).join(' ');
 
-    // Explicit frame-src so the iframe can load the http hosts (otherwise it
-    // inherits default-src). Includes localhost + the http hosts.
-    const frameSrc = ['http://127.0.0.1:*', 'http://localhost:*', httpScheme].filter(Boolean).join(' ');
+    // Explicit frame-src so the iframe can load anything but ourselves
+    // (otherwise it inherits default-src). BOTH allowlists belong here:
+    // httpScheme for the plain-HTTP hosts, httpsScheme for the https domains of
+    // `csp.allowedDomains`. Leaving httpsScheme out — as this line did until
+    // 0.1.37 — made `csp.allowedDomains` a half-truth: an allowed domain got
+    // script/style/img/font/connect and was silently refused as a *frame*, so
+    // `openBrowser?https://<allowed-domain>/…` opened a blank panel with a
+    // `Refused to frame` line in the webview console and no setting that could
+    // have fixed it. Found on academy.aimax.it, which frames fine — it sends
+    // neither X-Frame-Options nor frame-ancestors — and was blocked by us.
+    const frameSrc = ['http://127.0.0.1:*', 'http://localhost:*', httpsScheme, httpScheme].filter(Boolean).join(' ');
 
     return `default-src 'self' http://127.0.0.1:* http://localhost:* ${extra}; frame-src 'self' ${frameSrc}; script-src 'self' 'unsafe-inline' http://127.0.0.1:* http://localhost:* ${extra}; style-src 'self' 'unsafe-inline' http://127.0.0.1:* http://localhost:* ${extra}; img-src 'self' data: http://127.0.0.1:* http://localhost:* ${extra}; font-src 'self' data: http://127.0.0.1:* http://localhost:* ${extra}; connect-src 'self' http://127.0.0.1:* http://localhost:* ${extra};`;
 }
@@ -639,6 +647,25 @@ export function activate(context: vscode.ExtensionContext) {
         }
     });
 
+    // Export a file to PDF without opening it first: same renderer as the panel's
+    // menu item, reached from the explorer context menu or the command palette.
+    const exportPdfCommand = vscode.commands.registerCommand('aimaxViewer.exportPdf', (uri?: vscode.Uri) => {
+        const filePath = uri?.fsPath || vscode.window.activeTextEditor?.document.uri.fsPath;
+        if (!filePath) {
+            vscode.window.showWarningMessage('Open or select an HTML or Markdown file to export as PDF');
+            return;
+        }
+        if (!/\.(html?|md|markdown)$/i.test(filePath)) {
+            vscode.window.showWarningMessage('Only HTML and Markdown files can be exported as PDF');
+            return;
+        }
+        if (!workspaceFolder) {
+            vscode.window.showWarningMessage('Export as PDF needs an open workspace: the file is rendered through the AIMax server');
+            return;
+        }
+        exportUrlToPdf(getHttpUrl(filePath, workspaceFolder));
+    });
+
     // Present HTML file in system browser (presenter mode)
     const presentFileCommand = vscode.commands.registerCommand('aimaxViewer.presentFile', (uri: vscode.Uri) => {
         let filePath: string | undefined;
@@ -724,9 +751,15 @@ export function activate(context: vscode.ExtensionContext) {
             vscode.window.showWarningMessage('No folder selected');
             return;
         }
+        // statSync follows symlinks, so a symlinked folder would pass the check below and
+        // the new window would be rooted at the link inside the current repo. lstat spots
+        // the link, realpath gives the folder it actually points to.
+        let target = uri.fsPath;
         try {
-            const stat = fs.statSync(uri.fsPath);
-            if (!stat.isDirectory()) {
+            if (fs.lstatSync(target).isSymbolicLink()) {
+                target = fs.realpathSync(target);
+            }
+            if (!fs.statSync(target).isDirectory()) {
                 vscode.window.showWarningMessage('Selected item is not a folder');
                 return;
             }
@@ -734,7 +767,7 @@ export function activate(context: vscode.ExtensionContext) {
             vscode.window.showWarningMessage('Folder does not exist');
             return;
         }
-        vscode.commands.executeCommand('vscode.openFolder', uri, { forceNewWindow: true });
+        vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(target), { forceNewWindow: true });
     });
 
     // Command: Commit with Claude (folder-scoped selective commit via Claude Code)
@@ -901,6 +934,7 @@ Reply to me in language: ${userLang} (IETF BCP 47 tag).`;
         openHomeCommand,
         openCurrentFileCommand,
         openFileInViewerCommand,
+        exportPdfCommand,
         presentFileCommand,
         addFolderToViewerCommand,
         openFolderInNewWindowCommand,
@@ -1815,46 +1849,7 @@ function openInBrowser(url: string, customTitle?: string) {
         const faviconUri = getFaviconDataUri();
 
         // Handle messages from webview
-        newPanel.webview.onDidReceiveMessage(message => {
-            if (message.command === 'copyToClipboard') {
-                vscode.env.clipboard.writeText(message.text || '');
-            } else if (message.command === 'openExternal' && message.url) {
-                vscode.env.openExternal(vscode.Uri.parse(message.url));
-            } else if (message.command === 'openInBrowser' && message.url) {
-                openInBrowser(message.url);
-            } else if (message.command === 'updateTitle' && message.title) {
-                newPanel.title = message.title;
-            } else if (message.command === 'openCurrentFile') {
-                vscode.commands.executeCommand('aimaxViewer.openCurrentFile');
-            } else if (message.command === 'restoreLayout' || message.command === 'restoreBackup') {
-                handleRestore(message, newPanel);
-            } else if (message.command === 'openDevTools') {
-                // Webview devtools, not the window's: this opens the console of
-                // the panel itself, which is where the viewer's own errors land.
-                vscode.commands.executeCommand('workbench.action.webview.openDeveloperTools');
-            } else if (message.command === 'openTerminal') {
-                vscode.commands.executeCommand('aimaxViewer.openTerminal');
-            } else if (message.command === 'openClaudeCode') {
-                vscode.commands.executeCommand('aimaxViewer.openClaudeCode');
-            } else if (message.command === 'presentFile' && message.url) {
-                const presenterUrl = `http://127.0.0.1:${serverPort}/__presenter#${message.url}`;
-                vscode.env.openExternal(vscode.Uri.parse(presenterUrl));
-            } else if (message.command === 'makePresentable' && message.url) {
-                openMakePresentableInClaude(message.url);
-            } else if (message.command === 'addBridgeToPage' && message.url) {
-                dispatchAddBridgeToPage(message.url);
-            } else if (message.command === 'skipAnnotForHost' && message.url) {
-                dispatchSkipAnnotForHost(message.url);
-            } else if (message.command === 'claudeBridge') {
-                handleClaudeBridge(message.mode, (message.prompt || '').trim(), (result) => {
-                    newPanel.webview.postMessage({ command: 'bridgeResult', ...result });
-                }, { allowEdits: !!message.allowEdits });
-            } else if (message.command === 'saveEdit') {
-                handleSaveEdit(message, newPanel);
-            } else if (message.command === 'updateConfig' && message.key) {
-                applyConfigToggle(message.key, message.value);
-            }
-        });
+        newPanel.webview.onDidReceiveMessage(message => handleBrowserPanelMessage(message, () => newPanel));
 
         const showDropdown = config.browserLayout === 'top';
         newPanel.webview.html = getBrowserHtml(url, pageTitle, faviconUri, showDropdown);
@@ -1881,50 +1876,7 @@ function openInBrowser(url: string, customTitle?: string) {
         });
 
         // Handle messages from webview
-        browserPanel.webview.onDidReceiveMessage(message => {
-            if (message.command === 'copyToClipboard') {
-                vscode.env.clipboard.writeText(message.text || '');
-            } else if (message.command === 'openExternal' && message.url) {
-                vscode.env.openExternal(vscode.Uri.parse(message.url));
-            } else if (message.command === 'openInBrowser' && message.url) {
-                openInBrowser(message.url);
-            } else if (message.command === 'updateTitle' && message.title) {
-                if (browserPanel) {
-                    browserPanel.title = message.title;
-                }
-            } else if (message.command === 'openCurrentFile') {
-                vscode.commands.executeCommand('aimaxViewer.openCurrentFile');
-            } else if (message.command === 'restoreLayout' || message.command === 'restoreBackup') {
-                handleRestore(message, browserPanel);
-            } else if (message.command === 'openDevTools') {
-                // Webview devtools, not the window's: this opens the console of
-                // the panel itself, which is where the viewer's own errors land.
-                vscode.commands.executeCommand('workbench.action.webview.openDeveloperTools');
-            } else if (message.command === 'openTerminal') {
-                vscode.commands.executeCommand('aimaxViewer.openTerminal');
-            } else if (message.command === 'openClaudeCode') {
-                vscode.commands.executeCommand('aimaxViewer.openClaudeCode');
-            } else if (message.command === 'presentFile' && message.url) {
-                const presenterUrl = `http://127.0.0.1:${serverPort}/__presenter#${message.url}`;
-                vscode.env.openExternal(vscode.Uri.parse(presenterUrl));
-            } else if (message.command === 'makePresentable' && message.url) {
-                openMakePresentableInClaude(message.url);
-            } else if (message.command === 'addBridgeToPage' && message.url) {
-                dispatchAddBridgeToPage(message.url);
-            } else if (message.command === 'skipAnnotForHost' && message.url) {
-                dispatchSkipAnnotForHost(message.url);
-            } else if (message.command === 'claudeBridge') {
-                handleClaudeBridge(message.mode, (message.prompt || '').trim(), (result) => {
-                    if (browserPanel) {
-                        browserPanel.webview.postMessage({ command: 'bridgeResult', ...result });
-                    }
-                }, { allowEdits: !!message.allowEdits });
-            } else if (message.command === 'saveEdit') {
-                handleSaveEdit(message, browserPanel);
-            } else if (message.command === 'updateConfig' && message.key) {
-                applyConfigToggle(message.key, message.value);
-            }
-        });
+        browserPanel.webview.onDidReceiveMessage(message => handleBrowserPanelMessage(message, () => browserPanel));
     }
 
     const faviconUri = getFaviconDataUri();
@@ -1933,6 +1885,67 @@ function openInBrowser(url: string, customTitle?: string) {
     const showDropdown = config.browserLayout === 'top';
     browserPanel.webview.html = getBrowserHtml(url, pageTitle, faviconUri, showDropdown);
     }
+
+// Both browser panels speak the same protocol: the multi-tab one created per URL
+// and the single-tab one reused in `browserPanel`. For a while they spoke it in
+// two copies of the same forty-line if/else, and the copies were only *nearly*
+// identical — Export as PDF was added to one of them and the menu item did
+// nothing in the other, silently, because an unknown command is just ignored.
+// That is the argument for this being one function.
+//
+// The panel arrives as a getter, not a value: `browserPanel` is a mutable global
+// that onDidDispose sets back to undefined, and the async bridge callback below
+// has to see that, so it asks again rather than closing over the old value.
+function handleBrowserPanelMessage(message: any, getPanel: () => vscode.WebviewPanel | undefined): void {
+    const panel = getPanel();
+    if (message.command === 'copyToClipboard') {
+        vscode.env.clipboard.writeText(message.text || '');
+    } else if (message.command === 'openExternal' && message.url) {
+        vscode.env.openExternal(vscode.Uri.parse(message.url));
+    } else if (message.command === 'openInBrowser' && message.url) {
+        openInBrowser(message.url);
+    } else if (message.command === 'updateTitle' && message.title) {
+        if (panel) {
+            panel.title = message.title;
+        }
+    } else if (message.command === 'openCurrentFile') {
+        vscode.commands.executeCommand('aimaxViewer.openCurrentFile');
+    } else if (message.command === 'exportPdf') {
+        // The panel navigates on its own, so the URL it is showing is the one it
+        // sends here — the host does not track it.
+        exportUrlToPdf(message.url || '');
+    } else if (message.command === 'restoreLayout' || message.command === 'restoreBackup') {
+        handleRestore(message, panel);
+    } else if (message.command === 'openDevTools') {
+        // Webview devtools, not the window's: this opens the console of
+        // the panel itself, which is where the viewer's own errors land.
+        vscode.commands.executeCommand('workbench.action.webview.openDeveloperTools');
+    } else if (message.command === 'openTerminal') {
+        vscode.commands.executeCommand('aimaxViewer.openTerminal');
+    } else if (message.command === 'openClaudeCode') {
+        vscode.commands.executeCommand('aimaxViewer.openClaudeCode');
+    } else if (message.command === 'presentFile' && message.url) {
+        const presenterUrl = `http://127.0.0.1:${serverPort}/__presenter#${message.url}`;
+        vscode.env.openExternal(vscode.Uri.parse(presenterUrl));
+    } else if (message.command === 'makePresentable' && message.url) {
+        openMakePresentableInClaude(message.url);
+    } else if (message.command === 'addBridgeToPage' && message.url) {
+        dispatchAddBridgeToPage(message.url);
+    } else if (message.command === 'skipAnnotForHost' && message.url) {
+        dispatchSkipAnnotForHost(message.url);
+    } else if (message.command === 'claudeBridge') {
+        handleClaudeBridge(message.mode, (message.prompt || '').trim(), (result) => {
+            const p = getPanel();
+            if (p) {
+                p.webview.postMessage({ command: 'bridgeResult', ...result });
+            }
+        }, { allowEdits: !!message.allowEdits });
+    } else if (message.command === 'saveEdit') {
+        handleSaveEdit(message, panel);
+    } else if (message.command === 'updateConfig' && message.key) {
+        applyConfigToggle(message.key, message.value);
+    }
+}
 
 function getBrowserHtml(url: string, title: string, faviconUri: string, showDropdown: boolean = true): string {
     const csp = generateCSP();
@@ -2610,6 +2623,7 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
         <button class="menu-item" onclick="openClaudeCode()">Open Claude Code</button>
         <button class="menu-item" onclick="openExternal()">Open External Browser</button>
         <button class="menu-item" onclick="openCurrentFile()">Open Current Editor File</button>
+        <button class="menu-item" onclick="exportPdf()" title="Render this page to PDF with headless Chrome/Edge — vector text, the page's own print styles, diagrams included">Export as PDF…</button>
         <button class="menu-item" id="addBridgeMenuItem" onclick="addBridgeToPage()" disabled title="Available only on local HTML artifacts served by AIMax Viewer">Add Claude Bridge to this page (persistent)…</button>
         <button class="menu-item" onclick="goHome()">Go to Home</button>
         <div class="menu-divider"></div>
@@ -2798,71 +2812,14 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
             toggleMenu();
         }
 
-        // Load html2pdf.js dynamically
-        let html2pdfLoaded = false;
-        function loadHtml2Pdf() {
-            return new Promise((resolve, reject) => {
-                if (html2pdfLoaded && window.html2pdf) {
-                    resolve(window.html2pdf);
-                    return;
-                }
-                const script = document.createElement('script');
-                script.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js';
-                script.onload = () => {
-                    html2pdfLoaded = true;
-                    resolve(window.html2pdf);
-                };
-                script.onerror = reject;
-                document.head.appendChild(script);
-            });
-        }
-
-        async function exportPdf() {
+        // The export runs on the host, not here: this panel cannot touch the
+        // document. The iframe is a different origin (http://127.0.0.1 under a
+        // vscode-webview:// page), so contentDocument and contentWindow.print()
+        // both throw — an earlier html2canvas-based attempt lived here and could
+        // never get past that. The host prints the URL with headless Chrome.
+        function exportPdf() {
             toggleMenu();
-            try {
-                // Show loading indicator
-                const loadingDiv = document.createElement('div');
-                loadingDiv.id = 'pdfLoading';
-                loadingDiv.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;z-index:999999;color:white;font-size:16px;';
-                loadingDiv.innerHTML = '<div style="text-align:center;"><div style="font-size:24px;margin-bottom:10px;">⏳</div>Generating PDF...</div>';
-                document.body.appendChild(loadingDiv);
-
-                // Load html2pdf.js if not already loaded
-                await loadHtml2Pdf();
-
-                // Get iframe content
-                const iframeDoc = frame.contentDocument || frame.contentWindow.document;
-                const content = iframeDoc.body.cloneNode(true);
-
-                // Get filename from URL
-                const fileName = currentUrl.split('/').pop()?.replace('.html', '').replace('.md', '') || 'artifact';
-
-                // Generate PDF with html2pdf.js
-                const opt = {
-                    margin: [10, 10, 10, 10],
-                    filename: fileName + '.pdf',
-                    image: { type: 'jpeg', quality: 0.98 },
-                    html2canvas: { scale: 2, useCORS: true, logging: false },
-                    jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
-                };
-
-                await window.html2pdf().set(opt).from(content).save();
-
-                // Remove loading indicator
-                document.body.removeChild(loadingDiv);
-            } catch (e) {
-                // Remove loading if exists
-                const loading = document.getElementById('pdfLoading');
-                if (loading) loading.remove();
-
-                console.log('[AIMax] PDF export failed, falling back to print dialog:', e);
-                // Fallback to print dialog
-                try {
-                    frame.contentWindow.print();
-                } catch (printErr) {
-                    vscode.postMessage({ command: 'openExternal', url: currentUrl });
-                }
-            }
+            vscode.postMessage({ command: 'exportPdf', url: currentUrl });
         }
 
         function openExternal() {
@@ -4457,6 +4414,160 @@ function httpUrlToWorkspacePath(url: string): string | null {
         return path.join(workspaceFolder, relPath);
     } catch {
         return null;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Export to PDF
+//
+// The print has to happen outside the panel. The document sits in a
+// cross-origin iframe — http://127.0.0.1:<port> inside a vscode-webview:// page
+// — so the panel can neither read its DOM nor call print() on it; both throw a
+// SecurityError. (That is what defeated the html2pdf attempt this replaces: it
+// could only ever reach its own catch.) VS Code exposes no print API to a
+// webview either.
+//
+// What we do have is the rendered page on a URL, and a Chromium-family browser
+// will print a URL to PDF by itself:
+//
+//   chrome --headless=new --print-to-pdf=out.pdf --virtual-time-budget=N URL
+//
+// Real vector text, the page's own @media print rules, and — thanks to the
+// virtual time budget — diagrams that have finished rendering before the
+// snapshot. Nothing is bundled: it uses the Chrome/Edge/Chromium already
+// installed, so the VSIX does not grow and it works offline.
+//
+// Two things worth knowing before changing this. The budget is a *budget*, not
+// a "wait for idle": a document heavy enough to still be drawing when it runs
+// out prints half-drawn, which is why it is a setting. And backgrounds only
+// survive if the page asks for them with print-color-adjust: exact — the
+// markdown wrapper does, an arbitrary artifact may not.
+// ---------------------------------------------------------------------------
+
+// Ordered by preference; first hit wins. Windows entries are expanded against
+// the env vars because the Program Files path is localised on some installs.
+function pdfBrowserCandidates(): string[] {
+    if (process.platform === 'darwin') {
+        return [
+            '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+            '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
+            '/Applications/Chromium.app/Contents/MacOS/Chromium',
+            '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser'
+        ];
+    }
+    if (process.platform === 'win32') {
+        const roots = [process.env['PROGRAMFILES'], process.env['PROGRAMFILES(X86)'], process.env['LOCALAPPDATA']]
+            .filter(Boolean) as string[];
+        const rel = [
+            'Google\\Chrome\\Application\\chrome.exe',
+            'Microsoft\\Edge\\Application\\msedge.exe',
+            'Chromium\\Application\\chrome.exe'
+        ];
+        return roots.flatMap(r => rel.map(x => path.join(r, x)));
+    }
+    return [
+        '/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/usr/bin/chromium',
+        '/usr/bin/chromium-browser', '/usr/bin/microsoft-edge', '/snap/bin/chromium'
+    ];
+}
+
+function findPdfBrowser(): string | null {
+    const configured = vscode.workspace.getConfiguration('aimaxViewer').get<string>('pdf.browserPath', '').trim();
+    if (configured) {
+        // An explicit path that does not exist is a mistake worth reporting rather
+        // than silently papering over with a different browser.
+        return fs.existsSync(configured) ? configured : null;
+    }
+    return pdfBrowserCandidates().find(p => fs.existsSync(p)) || null;
+}
+
+// Suggested file name: the served file's own name with a .pdf extension, so an
+// export of Artifacts/deck.html lands next to it as deck.pdf.
+function pdfDefaultTarget(url: string): vscode.Uri | undefined {
+    const workspacePath = httpUrlToWorkspacePath(url);
+    if (workspacePath) {
+        return vscode.Uri.file(workspacePath.replace(/\.(html?|md|markdown)$/i, '') + '.pdf');
+    }
+    let base = 'export';
+    try {
+        base = (new URL(url).pathname.split('/').pop() || 'export').replace(/\.[^.]+$/, '') || 'export';
+    } catch { /* keep the fallback */ }
+    const folder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    return folder ? vscode.Uri.file(path.join(folder, base + '.pdf')) : undefined;
+}
+
+async function exportUrlToPdf(url: string): Promise<void> {
+    if (!url || !/^https?:\/\//i.test(url)) {
+        vscode.window.showWarningMessage('Export as PDF needs a page served over http — this panel is not showing one.');
+        return;
+    }
+
+    const browser = findPdfBrowser();
+    if (!browser) {
+        const configured = vscode.workspace.getConfiguration('aimaxViewer').get<string>('pdf.browserPath', '').trim();
+        const msg = configured
+            ? `aimaxViewer.pdf.browserPath points at "${configured}", which does not exist.`
+            : 'No Chrome, Edge, Chromium or Brave found to render the PDF.';
+        const choice = await vscode.window.showWarningMessage(
+            `${msg} You can still print the page from your own browser.`,
+            'Open in Browser', 'Set browser path…'
+        );
+        if (choice === 'Open in Browser') {
+            vscode.env.openExternal(vscode.Uri.parse(url));
+        } else if (choice === 'Set browser path…') {
+            vscode.commands.executeCommand('workbench.action.openSettings', 'aimaxViewer.pdf.browserPath');
+        }
+        return;
+    }
+
+    const target = await vscode.window.showSaveDialog({
+        defaultUri: pdfDefaultTarget(url),
+        filters: { PDF: ['pdf'] },
+        saveLabel: 'Export PDF'
+    });
+    if (!target) return;
+
+    const waitMs = vscode.workspace.getConfiguration('aimaxViewer').get<number>('pdf.waitMs', 10000);
+    // No --user-data-dir on purpose. A throwaway profile looks like the tidy
+    // choice, and it is what broke the first version: with one, Chrome writes the
+    // PDF and then never exits, so every export sat until the timeout killed it
+    // (measured: 3.5s without, still running at 25s with). Sharing the default
+    // profile is also safe for the case the temp dir was meant to protect —
+    // verified with the user's own Chrome open and holding the profile lock.
+    const args = [
+        '--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check',
+        '--disable-extensions', '--hide-scrollbars', '--no-pdf-header-footer',
+        `--virtual-time-budget=${Math.max(0, waitMs)}`,
+        `--print-to-pdf=${target.fsPath}`,
+        url
+    ];
+
+    const failure = await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: 'AIMax Viewer: exporting PDF…' },
+        () => new Promise<string | null>(resolve => {
+            execFile(browser, args, { timeout: Math.max(30000, waitMs + 20000) }, (err) => {
+                // Chrome reports success on stderr and exits 0; trust the file.
+                if (fs.existsSync(target.fsPath) && fs.statSync(target.fsPath).size > 0) return resolve(null);
+                resolve(err ? err.message : 'the browser produced no PDF');
+            });
+        })
+    );
+
+    if (failure) {
+        const choice = await vscode.window.showErrorMessage(`PDF export failed: ${failure}`, 'Open in Browser');
+        if (choice === 'Open in Browser') vscode.env.openExternal(vscode.Uri.parse(url));
+        return;
+    }
+
+    const kb = Math.round(fs.statSync(target.fsPath).size / 1024);
+    const choice = await vscode.window.showInformationMessage(
+        `PDF exported — ${path.basename(target.fsPath)} (${kb} KB)`,
+        'Open', 'Reveal in Folder'
+    );
+    if (choice === 'Open') {
+        vscode.env.openExternal(target);
+    } else if (choice === 'Reveal in Folder') {
+        vscode.commands.executeCommand('revealFileInOS', target);
     }
 }
 
