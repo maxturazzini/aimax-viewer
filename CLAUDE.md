@@ -360,6 +360,38 @@ npx vsce publish --allow-missing-repository --pat $(cat ~/.claude/secrets/vsce-p
 # https://marketplace.visualstudio.com/manage/publishers/maxturazzini
 ```
 
+### 5b. Publish to Open VSX (VSCodium, Cursor, Windsurf)
+On Open VSX the extension lives under the **`aimax`** namespace
+(`aimax.aimax-viewer`), while the VS Code Marketplace is still `maxturazzini`.
+The plan is to move the Marketplace to `aimax` later; until then `package.json`
+keeps `"publisher": "maxturazzini"` and the Open VSX package is the same `.vsix`
+with only the publisher rewritten.
+
+Account: GitHub login `maxturazzini`, Eclipse account maxaiplayground@gmail.com,
+Publisher Agreement signed 2026-10-10. No token saved.
+```bash
+# Rewrite the publisher in a copy of the vsix (manifest + package.json only)
+W=/tmp/vsix-aimax; rm -rf $W; mkdir -p $W/x; cd $W/x
+unzip -q ~/claude_projects/AIMaxViewer/aimax-viewer-X.Y.Z.vsix
+sed -i '' 's/Publisher="maxturazzini"/Publisher="aimax"/' extension.vsixmanifest
+sed -i '' 's/"publisher": "maxturazzini"/"publisher": "aimax"/' extension/package.json
+zip -q -r -X ../aimax.aimax-viewer-X.Y.Z.vsix '[Content_Types].xml' extension.vsixmanifest extension
+
+# Upload it by hand at https://open-vsx.org/publish (logged in via GitHub).
+# "Under review" for ~2 min of automated scans, then live.
+# CLI alternative, if a token is ever saved:
+#   ovsx publish $W/aimax.aimax-viewer-X.Y.Z.vsix -p $(cat ~/.claude/secrets/ovsx-pat.txt)
+
+# Extension URL: https://open-vsx.org/extension/aimax/aimax-viewer
+```
+- **Namespace `aimax` unverified**: until claimed, Open VSX warns that extensions
+  "can stay inactive". Claim via an issue on EclipseFdn/open-vsx.org, Option 3
+  (namespace matches the domain `aimax.it`, registrant MTX SRL).
+- **`maxturazzini.aimax-viewer` on Open VSX** (0.1.36, 2026-10-10) is the first,
+  superseded upload. Do not publish there again.
+- Open VSX has no "deprecate" button: the management page only offers deleting
+  versions.
+
 ### 6. Create GitHub Release
 ```bash
 # IMPORTANT: Ensure correct account is active
