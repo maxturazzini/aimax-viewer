@@ -387,8 +387,9 @@ zip -q -r -X ../aimax.aimax-viewer-X.Y.Z.vsix '[Content_Types].xml' extension.vs
 - **Namespace `aimax` unverified**: until claimed, Open VSX warns that extensions
   "can stay inactive". Claim via an issue on EclipseFdn/open-vsx.org, Option 3
   (namespace matches the domain `aimax.it`, registrant MTX SRL).
-- **`maxturazzini.aimax-viewer` on Open VSX** (0.1.36, 2026-10-10) is the first,
-  superseded upload. Do not publish there again.
+- **`maxturazzini.aimax-viewer` on Open VSX** (0.1.36, 2026-10-10) was the first
+  upload, deleted the same day: its downloads were mirrors and scanners. The
+  `maxturazzini` namespace is left empty there; do not publish to it.
 - Open VSX has no "deprecate" button: the management page only offers deleting
   versions.
 
