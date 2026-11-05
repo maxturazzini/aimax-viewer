@@ -2,7 +2,7 @@
 
 All notable changes to the AIMax Viewer extension will be documented in this file.
 
-## [0.1.37] - unreleased
+## [0.1.37] - 2026-11-05
 
 ### Added — Export as PDF
 
