@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { THEME_CSS } from './theme';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as http from 'http';
@@ -1958,22 +1959,23 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta http-equiv="Content-Security-Policy" content="${csp}">
-    <style>
+    <style>${THEME_CSS}
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-            background: #1e1e1e;
+            background: var(--axv-bg);
+            color: var(--axv-fg);
             height: 100vh;
             display: flex;
             flex-direction: column;
         }
         .toolbar {
-            background: linear-gradient(90deg, #1a1a2e 0%, #16213e 100%);
+            background: var(--axv-toolbar-bg);
             padding: 8px 12px;
             display: flex;
             align-items: center;
             gap: 8px;
-            border-bottom: 2px solid #00d4ff;
+            border-bottom: 2px solid var(--axv-toolbar-line);
         }
         .brand-icon {
             height: 22px;
@@ -1986,8 +1988,8 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
         .brand-icon:hover { opacity: 0.7; }
         .nav-btn {
             background: transparent;
-            border: 1px solid rgba(255,255,255,0.15);
-            color: #666;
+            border: 1px solid var(--axv-border);
+            color: var(--axv-icon);
             padding: 2px 6px;
             border-radius: 4px;
             cursor: pointer;
@@ -1995,23 +1997,25 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
             font-family: system-ui;
             line-height: 1;
         }
-        .nav-btn:hover:not(:disabled) { color: #00d4ff; border-color: #00d4ff; }
+        .nav-btn:hover:not(:disabled) { background: var(--axv-hover-bg); border-color: var(--axv-focus); }
         .nav-btn:disabled { opacity: 0.3; cursor: default; }
         .select-wrapper {
             flex: 1;
             display: flex;
             align-items: center;
-            background: #3c3c3c;
+            background: var(--axv-dropdown-bg);
+            box-shadow: inset 0 0 0 1px var(--axv-dropdown-border);
             border-radius: 4px;
             position: relative;
         }
-        .select-wrapper:hover { background: #4c4c4c; }
+        .select-wrapper:hover { box-shadow: inset 0 0 0 1px var(--axv-focus); }
         .url-display {
             flex: 1;
             display: flex;
             align-items: center;
             justify-content: flex-end;
-            background: #3c3c3c;
+            background: var(--axv-input-bg);
+            box-shadow: inset 0 0 0 1px var(--axv-input-border);
             border-radius: 4px;
             padding: 0 4px;
             gap: 6px;
@@ -2020,7 +2024,7 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
         .address-display {
             flex: 1;
             min-width: 0;
-            color: #cccccc;
+            color: var(--axv-input-fg);
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
             font-size: 12px;
             padding: 0 8px;
@@ -2033,7 +2037,7 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
             flex: 1;
             background: transparent;
             border: none;
-            color: #cccccc;
+            color: var(--axv-dropdown-fg);
             padding: 6px 12px;
             padding-right: 28px;
             font-size: 12px;
@@ -2043,51 +2047,51 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
             -webkit-appearance: none;
         }
         .artifact-select option {
-            background: #252526;
-            color: #cccccc;
+            background: var(--axv-dropdown-list-bg);
+            color: var(--axv-dropdown-fg);
         }
         .select-info-btn {
             background: transparent;
             border: none;
-            color: #888;
+            color: var(--axv-fg-muted);
             font-size: 12px;
             cursor: pointer;
             padding: 4px 8px;
             position: relative;
         }
-        .select-info-btn:hover { color: #00d4ff; }
+        .select-info-btn:hover { color: var(--axv-fg); }
         .info-tooltip {
             display: none;
             position: absolute;
             top: 100%;
             right: 0;
-            background: #1e1e1e;
-            border: 1px solid #3c3c3c;
+            background: var(--axv-tooltip-bg);
+            border: 1px solid var(--axv-tooltip-border);
             border-radius: 6px;
             padding: 10px 14px;
             font-size: 12px;
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-            color: #cccccc;
+            color: var(--axv-tooltip-fg);
             white-space: normal;
             min-width: 250px;
             max-width: 400px;
             z-index: 100001;
             margin-top: 4px;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+            box-shadow: 0 4px 12px var(--axv-shadow);
             line-height: 1.4;
         }
         .select-info-btn:hover .info-tooltip { display: block; }
         .title-badge {
-            background: #0e639c;
-            color: white;
+            background: var(--axv-button-bg);
+            color: var(--axv-button-fg);
             padding: 4px 10px;
             border-radius: 4px;
             font-size: 11px;
         }
         .toolbar-btn {
             background: transparent;
-            border: 1px solid #3c3c3c;
-            color: #cccccc;
+            border: 1px solid var(--axv-border);
+            color: var(--axv-icon);
             font-size: 11px;
             cursor: pointer;
             padding: 4px 8px;
@@ -2097,36 +2101,37 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
             gap: 4px;
         }
         .toolbar-btn:hover {
-            color: #00d4ff;
-            border-color: #00d4ff;
+            background: var(--axv-hover-bg);
+            border-color: var(--axv-focus);
         }
         .menu-btn {
             background: transparent;
             border: none;
-            color: #cccccc;
+            color: var(--axv-icon);
             font-size: 18px;
             cursor: pointer;
             padding: 4px 8px;
+            border-radius: 4px;
         }
-        .menu-btn:hover { color: #00d4ff; }
+        .menu-btn:hover { background: var(--axv-hover-bg); }
         .menu {
             display: none;
             position: fixed;
             top: 44px;
             right: 12px;
-            background: #252526;
-            border: 1px solid #3c3c3c;
+            background: var(--axv-menu-bg);
+            border: 1px solid var(--axv-menu-border);
             border-radius: 8px;
             padding: 8px 0;
             z-index: 100000;
             min-width: 200px;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            box-shadow: 0 4px 12px var(--axv-shadow);
         }
         .menu.open { display: block; }
         .menu-item {
             display: block;
             padding: 8px 16px;
-            color: #cccccc;
+            color: var(--axv-menu-fg);
             text-decoration: none;
             font-size: 13px;
             cursor: pointer;
@@ -2135,7 +2140,7 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
             width: 100%;
             text-align: left;
         }
-        .menu-item:hover { background: #3c3c3c; color: #00d4ff; }
+        .menu-item:hover { background: var(--axv-menu-sel-bg); color: var(--axv-menu-sel-fg); }
         .menu-item:disabled,
         .menu-item[aria-disabled="true"] {
             opacity: 0.4;
@@ -2144,14 +2149,14 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
         .menu-item:disabled:hover,
         .menu-item[aria-disabled="true"]:hover {
             background: transparent;
-            color: #cccccc;
+            color: var(--axv-menu-fg);
         }
-        .menu-divider { border-top: 1px solid #3c3c3c; margin: 4px 0; }
+        .menu-divider { border-top: 1px solid var(--axv-menu-sep); margin: 4px 0; }
         /* Claude Bridge toolbar button + dropdown */
         .bridge-toolbar-btn {
             background: transparent;
-            border: 1px solid #3c3c3c;
-            color: #fff;
+            border: 1px solid var(--axv-border);
+            color: var(--axv-icon);
             cursor: pointer;
             padding: 4px 8px;
             border-radius: 4px;
@@ -2162,25 +2167,26 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
             line-height: 1;
         }
         .bridge-toolbar-btn:hover {
-            color: #00d4ff;
-            border-color: #00d4ff;
+            background: var(--axv-hover-bg);
+            border-color: var(--axv-focus);
         }
         .bridge-menu {
             display: none;
             position: fixed;
             top: 44px;
             right: 60px;
-            background: #252526;
-            border: 1px solid #3c3c3c;
+            background: var(--axv-widget-bg);
+            border: 1px solid var(--axv-widget-border);
+            color: var(--axv-widget-fg);
             border-radius: 8px;
             padding: 12px;
             z-index: 100000;
             width: 320px;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            box-shadow: 0 4px 12px var(--axv-shadow);
         }
         .bridge-menu.open { display: block; }
         .bridge-menu .bridge-title {
-            color: #cdd6f4;
+            color: var(--axv-widget-fg);
             font-weight: 600;
             font-size: 13px;
             margin-bottom: 8px;
@@ -2191,7 +2197,7 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
         .bridge-menu .bridge-close {
             background: none;
             border: none;
-            color: #888;
+            color: var(--axv-fg-muted);
             cursor: pointer;
             font-size: 16px;
             line-height: 1;
@@ -2200,9 +2206,9 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
         .bridge-menu textarea {
             width: 100%;
             height: 80px;
-            background: #181825;
-            color: #cdd6f4;
-            border: 1px solid #555;
+            background: var(--axv-input-bg);
+            color: var(--axv-input-fg);
+            border: 1px solid var(--axv-input-border);
             border-radius: 6px;
             padding: 8px;
             font-size: 12px;
@@ -2223,18 +2229,18 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
             gap: 6px;
             margin-top: 8px;
             font-size: 11px;
-            color: #cdd6f4;
+            color: var(--axv-widget-fg);
             cursor: help;
             user-select: none;
         }
-        .bridge-menu .bridge-allow-edits input { cursor: pointer; accent-color: #00d4ff; }
+        .bridge-menu .bridge-allow-edits input { cursor: pointer; accent-color: var(--axv-button-bg); }
         .bridge-response {
             display: none;
             margin-top: 8px;
             padding: 8px;
-            background: #181825;
+            background: var(--axv-code-bg);
             border-radius: 6px;
-            color: #cdd6f4;
+            color: var(--axv-widget-fg);
             font-size: 12px;
             max-height: 200px;
             overflow-y: auto;
@@ -2244,7 +2250,7 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
         .bridge-status {
             margin-top: 6px;
             font-size: 10px;
-            color: #888;
+            color: var(--axv-fg-muted);
             text-align: center;
             min-height: 12px;
         }
@@ -2259,11 +2265,11 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
             flex-direction: column;
             align-items: center;
             justify-content: center;
-            color: #cccccc;
+            color: var(--axv-fg);
             text-align: center;
             padding: 40px;
         }
-        .error h2 { margin-bottom: 16px; color: #e06c75; }
+        .error h2 { margin-bottom: 16px; color: var(--axv-error); }
         .error p { margin-bottom: 24px; opacity: 0.8; }
 
         @media print {
@@ -2279,32 +2285,32 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
             body { height: auto; background: white; }
         }
         .toolbar-btn.active {
-            color: #00d4ff;
-            border-color: #00d4ff;
-            background: rgba(0, 212, 255, 0.12);
+            color: var(--axv-annot);
+            border-color: var(--axv-annot);
+            background: color-mix(in srgb, var(--axv-annot) 12%, transparent);
         }
         .toolbar-btn.active-edit {
-            color: #ff9500;
-            border-color: #ff9500;
-            background: rgba(255, 149, 0, 0.14);
+            color: var(--axv-edit);
+            border-color: var(--axv-edit);
+            background: color-mix(in srgb, var(--axv-edit) 14%, transparent);
         }
         .toolbar-btn.active-draw {
-            color: #ff2d92;
-            border-color: #ff2d92;
-            background: rgba(255, 45, 146, 0.14);
+            color: var(--axv-draw);
+            border-color: var(--axv-draw);
+            background: color-mix(in srgb, var(--axv-draw) 14%, transparent);
         }
         .toolbar-btn:disabled {
             opacity: 0.35;
             cursor: not-allowed;
         }
-        .annot-window.edit-mode { border-color: #ff9500; }
-        .annot-window.edit-mode .annot-header strong { color: #ff9500; }
+        .annot-window.edit-mode { border-color: var(--axv-edit); }
+        .annot-window.edit-mode .annot-header strong { color: var(--axv-edit); }
         .annot-window.edit-mode .aimax-comment-only { display: none !important; }
-        .aimax-icon-btn.aimax-save-btn { color: #34c759; border-color: #34c759; padding: 3px 10px; }
-        .aimax-icon-btn.aimax-save-btn:not(:disabled):hover { background: rgba(52, 199, 89, 0.15); }
+        .aimax-icon-btn.aimax-save-btn { color: var(--axv-save); border-color: var(--axv-save); padding: 3px 10px; }
+        .aimax-icon-btn.aimax-save-btn:not(:disabled):hover { background: color-mix(in srgb, var(--axv-save) 15%, transparent); }
         .aimax-icon-btn.aimax-save-btn .save-text { font-size: 11px; font-weight: 600; letter-spacing: 0.3px; }
-        .aimax-icon-btn.notes-active { background: rgba(181, 137, 0, 0.20); border-color: #b58900; color: #ffcc44; }
-        .aimax-icon-btn.layout-active { background: rgba(255, 149, 0, 0.22); border-color: #ff9500; color: #ffb347; }
+        .aimax-icon-btn.notes-active { background: color-mix(in srgb, var(--axv-notes) 20%, transparent); border-color: var(--axv-notes); color: var(--axv-notes); }
+        .aimax-icon-btn.layout-active { background: color-mix(in srgb, var(--axv-edit) 22%, transparent); border-color: var(--axv-edit); color: var(--axv-edit); }
         /* Move/Resize tool row, rendered in the panel body: present only while
            the sub-mode is on, so text-edit mode keeps its plain hint. */
         .aimax-lay-tools { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
@@ -2313,9 +2319,9 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
             justify-content: center;
             font-size: 13px;
             line-height: 1;
-            background: #1a1a2e;
-            border: 1px solid rgba(255, 149, 0, 0.45);
-            color: #ffb347;
+            background: transparent;
+            border: 1px solid color-mix(in srgb, var(--axv-edit) 45%, transparent);
+            color: var(--axv-edit);
             border-radius: 4px;
             padding: 4px 10px;
             font-size: 11px;
@@ -2325,15 +2331,15 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
             align-items: center;
             gap: 5px;
         }
-        .aimax-lay-tools button:hover:not(:disabled) { background: #2a2a3e; border-color: #ff9500; }
+        .aimax-lay-tools button:hover:not(:disabled) { background: var(--axv-hover-bg); border-color: var(--axv-edit); }
         .aimax-lay-tools button:disabled { opacity: 0.35; cursor: not-allowed; }
         .aimax-lay-tools .lay-key { opacity: 0.55; font-weight: 400; font-size: 10px; }
         .aimax-lay-tools .lay-group { align-self: center; font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; opacity: 0.5; margin-right: 2px; }
         /* Sub-mode toggles: one group per top-level mode, only the active
            group is mounted, and exactly one button in it reads as selected. */
-        .submode-group { display: inline-flex; gap: 3px; padding: 2px; background: rgba(0,0,0,0.25); border-radius: 6px; }
-        .aimax-icon-btn.submode.on { background: rgba(0, 212, 255, 0.20); border-color: #00d4ff; color: #6fe3ff; }
-        .annot-window.edit-mode .aimax-icon-btn.submode.on { background: rgba(255, 149, 0, 0.22); border-color: #ff9500; color: #ffb347; }
+        .submode-group { display: inline-flex; gap: 3px; padding: 2px; background: color-mix(in srgb, var(--axv-fg) 8%, transparent); border-radius: 6px; }
+        .aimax-icon-btn.submode.on { background: color-mix(in srgb, var(--axv-annot) 20%, transparent); border-color: var(--axv-annot); color: var(--axv-annot); }
+        .annot-window.edit-mode .aimax-icon-btn.submode.on { background: color-mix(in srgb, var(--axv-edit) 22%, transparent); border-color: var(--axv-edit); color: var(--axv-edit); }
         /* Action row: what you DO with what you collected, kept out of the header. */
         .annot-actions { padding: 8px 10px 0; }
         .annot-actions:empty { display: none; }
@@ -2345,57 +2351,57 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
             right: 12px;
             width: 380px;
             max-height: 70vh;
-            background: #1e1e1e;
-            border: 1px solid #00d4ff;
+            background: var(--axv-widget-bg);
+            border: 1px solid var(--axv-annot);
             border-radius: 8px;
-            box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+            box-shadow: 0 8px 24px var(--axv-shadow);
             z-index: 100002;
             flex-direction: column;
             overflow: hidden;
         }
         .annot-window.open { display: flex; }
         .annot-header {
-            background: linear-gradient(90deg, #16213e 0%, #1a1a2e 100%);
+            background: var(--axv-header-bg);
             padding: 8px 12px;
-            color: #cccccc;
+            color: var(--axv-fg);
             font-size: 12px;
             display: flex;
             align-items: center;
             gap: 8px;
-            border-bottom: 1px solid #3c3c3c;
+            border-bottom: 1px solid var(--axv-border);
         }
-        .annot-header strong { color: #00d4ff; flex: 1; }
+        .annot-header strong { color: var(--axv-annot); flex: 1; }
         .annot-header button {
             background: transparent;
-            border: 1px solid #3c3c3c;
-            color: #cccccc;
+            border: 1px solid var(--axv-border);
+            color: var(--axv-icon);
             font-size: 11px;
             cursor: pointer;
             padding: 3px 8px;
             border-radius: 4px;
         }
-        .annot-header button:hover { color: #00d4ff; border-color: #00d4ff; }
+        .annot-header button:hover { background: var(--axv-hover-bg); border-color: var(--axv-focus); }
         .annot-body {
             flex: 1;
             overflow: auto;
             padding: 6px 0;
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
             font-size: 12px;
-            color: #cccccc;
-            background: #14141a;
+            color: var(--axv-fg);
+            background: var(--axv-bg);
         }
         .annot-row {
             display: flex;
             align-items: center;
             gap: 8px;
             padding: 6px 12px;
-            border-bottom: 1px solid #232330;
+            border-bottom: 1px solid var(--axv-border);
             cursor: default;
         }
-        .annot-row:hover { background: #1f1f2c; }
+        .annot-row:hover { background: var(--axv-list-hover-bg); }
         .annot-num {
-            background: #00d4ff;
-            color: #001018;
+            background: var(--axv-annot);
+            color: var(--axv-on-annot);
             font-weight: bold;
             font-size: 10px;
             width: 18px;
@@ -2407,7 +2413,7 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
             flex-shrink: 0;
         }
         .annot-draw-mark {
-            color: #ff2d92;
+            color: var(--axv-draw);
             font-size: 11px;
             flex-shrink: 0;
         }
@@ -2418,22 +2424,22 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
             text-overflow: ellipsis;
         }
         .annot-tag {
-            color: #888;
+            color: var(--axv-fg-muted);
             font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
             font-size: 10px;
             flex-shrink: 0;
         }
         .annot-x {
-            color: #888;
+            color: var(--axv-fg-muted);
             cursor: pointer;
             padding: 0 4px;
             flex-shrink: 0;
             font-size: 14px;
             line-height: 1;
         }
-        .annot-x:hover { color: #ff5757; }
+        .annot-x:hover { color: var(--axv-error); }
         .annot-empty {
-            color: #666;
+            color: var(--axv-fg-muted);
             font-style: italic;
             padding: 12px;
             text-align: center;
@@ -2442,10 +2448,10 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
             display: none;
             margin: 6px 8px 8px 8px;
             padding: 8px;
-            background: #181825;
-            border: 1px solid #3c3c3c;
+            background: var(--axv-code-bg);
+            border: 1px solid var(--axv-border);
             border-radius: 6px;
-            color: #cdd6f4;
+            color: var(--axv-widget-fg);
             font-size: 11px;
             max-height: 240px;
             overflow-y: auto;
@@ -2456,8 +2462,8 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
         /* Shared icon button (annotations + bridge — same actions, same look) */
         .aimax-icon-btn {
             background: transparent;
-            border: 1px solid #3c3c3c;
-            color: #00d4ff;
+            border: 1px solid var(--axv-border);
+            color: var(--axv-icon);
             cursor: pointer;
             padding: 3px 6px;
             border-radius: 4px;
@@ -2470,7 +2476,7 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
             line-height: 1;
             font-size: 11px;
         }
-        .aimax-icon-btn:hover { background: #2a2a3e; border-color: #00d4ff; }
+        .aimax-icon-btn:hover { background: var(--axv-hover-bg); border-color: var(--axv-focus); }
         .aimax-icon-btn:disabled { opacity: 0.4; cursor: not-allowed; }
         .aimax-icon-btn .label { font-size: 10px; font-weight: 600; }
         .aimax-icon-btn svg { display: block; }
@@ -2480,7 +2486,7 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
     <div class="toolbar">
         <button class="nav-btn" id="backBtn" onclick="goBack()" title="Back" disabled>←</button>
         <button class="nav-btn" id="fwdBtn" onclick="goForward()" title="Forward" disabled>→</button>
-        <button class="nav-btn" onclick="reload()" title="Reload" style="display:inline-flex;align-items:center;justify-content:center;color:#00d4ff;">
+        <button class="nav-btn" onclick="reload()" title="Reload" style="display:inline-flex;align-items:center;justify-content:center;color:var(--axv-icon);">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3.51-7.13"/><polyline points="21 4 21 10 15 10"/></svg>
         </button>
         ${showDropdown ? `
@@ -2503,14 +2509,14 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
         </div>
         `}
         <button class="toolbar-btn" id="annotBtn" onclick="toggleAnnotMode()" title="Toggle annotation mode">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#00d4ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" class="axv-ic-annot" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
         </button>
         <button class="toolbar-btn" id="editBtn" onclick="toggleEditMode()" title="Edit text in place (.html and .md)" disabled>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ff9500" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" class="axv-ic-edit" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
         </button>
-        <button class="toolbar-btn" id="bridgeToolbarBtn" onclick="aimaxBridgeToggle()" title="Claude Bridge"><span style="color:#00d4ff;font-size:14px;line-height:1;">&#10042;</span></button>
+        <button class="toolbar-btn" id="bridgeToolbarBtn" onclick="aimaxBridgeToggle()" title="Claude Bridge"><span style="font-size:14px;line-height:1;">&#10042;</span></button>
         <button class="toolbar-btn" onclick="openTerminal()" title="Open new terminal">
-            <span style="color: #00d4ff; font-size: 14px;">&gt;</span>
+            <span style="font-size: 14px;">&gt;</span>
         </button>
         <button class="toolbar-btn" onclick="openClaudeCode()" title="New Claude Code conversation">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="#d97757" aria-hidden="true"><path d="M4.709 15.955l4.72-2.647.08-.23-.08-.128H9.2l-.79-.048-2.698-.073-2.339-.097-2.266-.122-.571-.121L0 11.784l.055-.352.48-.321.686.06 1.52.103 2.278.158 1.652.097 2.449.255h.389l.055-.157-.134-.098-.103-.097-2.358-1.596-2.552-1.688-1.336-.972-.724-.491-.364-.462-.158-1.008.656-.722.881.06.225.061.893.686 1.908 1.476 2.491 1.833.365.304.145-.103.019-.073-.164-.274-1.355-2.446-1.446-2.49-.644-1.032-.17-.619a2.97 2.97 0 01-.104-.729L6.283.134 6.696 0l.996.134.42.364.62 1.414 1.002 2.229 1.555 3.03.456.898.243.832.091.255h.158V9.01l.128-1.706.237-2.095.23-2.695.08-.76.376-.91.747-.492.584.28.48.685-.067.444-.286 1.851-.559 2.903-.364 1.942h.212l.243-.242.985-1.306 1.652-2.064.73-.82.85-.904.547-.431h1.033l.76 1.129-.34 1.166-1.064 1.347-.881 1.142-1.264 1.7-.79 1.36.073.11.188-.02 2.856-.606 1.543-.28 1.841-.315.833.388.091.395-.328.807-1.969.486-2.309.462-3.439.813-.042.03.049.061 1.549.146.662.036h1.622l3.02.225.79.522.474.638-.079.485-1.215.62-1.64-.389-3.829-.91-1.312-.329h-.182v.11l1.093 1.068 2.006 1.81 2.509 2.33.127.578-.322.455-.34-.049-2.205-1.657-.851-.747-1.926-1.62h-.128v.17l.444.649 2.345 3.521.122 1.08-.17.353-.608.213-.668-.122-1.374-1.925-1.415-2.167-1.143-1.943-.14.08-.674 7.254-.316.37-.729.28-.607-.461-.322-.747.322-1.476.389-1.924.315-1.53.286-1.9.17-.632-.012-.042-.14.018-1.434 1.967-2.18 2.945-1.726 1.845-.414.164-.717-.37.067-.662.401-.589 2.388-3.036 1.44-1.882.93-1.086-.006-.158h-.055L4.132 18.56l-1.13.146-.487-.456.061-.746.231-.243 1.908-1.312-.006.006z"/></svg>
@@ -2718,13 +2724,13 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
 
         // Update info tooltip with URL and optional metadata
         function updateInfoTooltip(url, metadata) {
-            let html = '<div style="font-size: 11px; color: #888; word-break: break-all;">' + url + '</div>';
+            let html = '<div style="font-size: 11px; color: var(--axv-fg-muted); word-break: break-all;">' + url + '</div>';
 
             if (metadata && Object.keys(metadata).length > 0) {
-                html += '<div style="margin-top: 8px; border-top: 1px solid #444; padding-top: 8px;">';
+                html += '<div style="margin-top: 8px; border-top: 1px solid var(--axv-border); padding-top: 8px;">';
                 for (const [key, value] of Object.entries(metadata)) {
                     const displayValue = Array.isArray(value) ? value.join(', ') : value;
-                    html += '<div style="margin-bottom: 4px;"><strong style="color: #00d4ff;">' + key + ':</strong> ' + displayValue + '</div>';
+                    html += '<div style="margin-bottom: 4px;"><strong style="color: var(--axv-link);">' + key + ':</strong> ' + displayValue + '</div>';
                 }
                 html += '</div>';
             }
@@ -3823,7 +3829,7 @@ function getBrowserHtml(url: string, title: string, faviconUri: string, showDrop
                     <h2>Cannot load page</h2>
                     <p>The page might be unavailable or blocked by security restrictions.</p>
                     <br><br>
-                    <button onclick="openExternal()" style="background:#0e639c;color:white;border:none;padding:8px 16px;border-radius:4px;cursor:pointer;">Open in External Browser</button>
+                    <button onclick="openExternal()" style="background:var(--axv-button-bg);color:var(--axv-button-fg);border:none;padding:8px 16px;border-radius:4px;cursor:pointer;">Open in External Browser</button>
                 </div>
             \`;
         };
@@ -4735,14 +4741,14 @@ function openArtifactsHome(workspaceFolder: string, homePage: string = 'Artifact
 // Wrap HTML with toolbar and inject link handler
 function wrapWithToolbarAndLinkHandler(html: string, title: string, faviconUri: string, filePath: string = ''): string {
     const toolbarStyles = `
-    <style>
+    <style>${THEME_CSS}
         .aimax-toolbar {
-            background: linear-gradient(90deg, #1a1a2e 0%, #16213e 100%);
+            background: var(--axv-toolbar-bg);
             padding: 8px 12px;
             display: flex;
             align-items: center;
             gap: 8px;
-            border-bottom: 2px solid #00d4ff;
+            border-bottom: 2px solid var(--axv-toolbar-line);
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
             position: fixed;
             top: 0;
@@ -4764,8 +4770,8 @@ function wrapWithToolbarAndLinkHandler(html: string, title: string, faviconUri: 
         .aimax-brand-icon:hover { opacity: 0.7; }
         .aimax-nav-btn {
             background: transparent;
-            border: 1px solid rgba(255,255,255,0.15);
-            color: #666;
+            border: 1px solid var(--axv-border);
+            color: var(--axv-icon);
             padding: 2px 6px;
             border-radius: 4px;
             cursor: pointer;
@@ -4773,17 +4779,17 @@ function wrapWithToolbarAndLinkHandler(html: string, title: string, faviconUri: 
             font-family: system-ui;
             line-height: 1;
         }
-        .aimax-nav-btn:hover:not(:disabled) { color: #00d4ff; border-color: #00d4ff; }
+        .aimax-nav-btn:hover:not(:disabled) { background: var(--axv-hover-bg); border-color: var(--axv-focus); }
         .aimax-nav-btn:disabled { opacity: 0.3; cursor: default; }
         .aimax-title {
-            color: #cccccc;
+            color: var(--axv-fg);
             font-size: 12px;
             flex: 1;
         }
         .aimax-toolbar-btn {
             background: transparent;
-            border: 1px solid #3c3c3c;
-            color: #cccccc;
+            border: 1px solid var(--axv-border);
+            color: var(--axv-icon);
             font-size: 11px;
             cursor: pointer;
             padding: 4px 8px;
@@ -4793,35 +4799,35 @@ function wrapWithToolbarAndLinkHandler(html: string, title: string, faviconUri: 
             gap: 4px;
         }
         .aimax-toolbar-btn:hover {
-            color: #00d4ff;
-            border-color: #00d4ff;
+            background: var(--axv-hover-bg);
+            border-color: var(--axv-focus);
         }
         .aimax-info-btn {
             background: transparent;
             border: none;
-            color: #888;
+            color: var(--axv-fg-muted);
             font-size: 14px;
             cursor: pointer;
             padding: 4px 6px;
         }
-        .aimax-info-btn:hover { color: #00d4ff; }
+        .aimax-info-btn:hover { color: var(--axv-fg); }
         .aimax-toolbar-btn.active {
-            color: #00d4ff;
-            border-color: #00d4ff;
-            background: rgba(0, 212, 255, 0.12);
+            color: var(--axv-annot);
+            border-color: var(--axv-annot);
+            background: color-mix(in srgb, var(--axv-annot) 12%, transparent);
         }
         .aimax-toolbar-btn.active-edit {
-            color: #ff9500;
-            border-color: #ff9500;
-            background: rgba(255, 149, 0, 0.14);
+            color: var(--axv-edit);
+            border-color: var(--axv-edit);
+            background: color-mix(in srgb, var(--axv-edit) 14%, transparent);
         }
         .aimax-toolbar-btn.active-draw {
-            color: #ff2d92;
-            border-color: #ff2d92;
-            background: rgba(255, 45, 146, 0.14);
+            color: var(--axv-draw);
+            border-color: var(--axv-draw);
+            background: color-mix(in srgb, var(--axv-draw) 14%, transparent);
         }
         .aimax-annot-draw-mark {
-            color: #ff2d92;
+            color: var(--axv-draw);
             font-size: 11px;
             flex-shrink: 0;
         }
@@ -4829,14 +4835,14 @@ function wrapWithToolbarAndLinkHandler(html: string, title: string, faviconUri: 
             opacity: 0.35;
             cursor: not-allowed;
         }
-        .aimax-annot-window.edit-mode { border-color: #ff9500; }
-        .aimax-annot-window.edit-mode .aimax-annot-header strong { color: #ff9500; }
+        .aimax-annot-window.edit-mode { border-color: var(--axv-edit); }
+        .aimax-annot-window.edit-mode .aimax-annot-header strong { color: var(--axv-edit); }
         .aimax-annot-window.edit-mode .aimax-comment-only { display: none !important; }
-        .aimax-icon-btn.aimax-save-btn { color: #34c759; border-color: #34c759; padding: 3px 10px; }
-        .aimax-icon-btn.aimax-save-btn:not(:disabled):hover { background: rgba(52, 199, 89, 0.15); }
+        .aimax-icon-btn.aimax-save-btn { color: var(--axv-save); border-color: var(--axv-save); padding: 3px 10px; }
+        .aimax-icon-btn.aimax-save-btn:not(:disabled):hover { background: color-mix(in srgb, var(--axv-save) 15%, transparent); }
         .aimax-icon-btn.aimax-save-btn .save-text { font-size: 11px; font-weight: 600; letter-spacing: 0.3px; }
-        .aimax-icon-btn.notes-active { background: rgba(181, 137, 0, 0.20); border-color: #b58900; color: #ffcc44; }
-        .aimax-icon-btn.layout-active { background: rgba(255, 149, 0, 0.22); border-color: #ff9500; color: #ffb347; }
+        .aimax-icon-btn.notes-active { background: color-mix(in srgb, var(--axv-notes) 20%, transparent); border-color: var(--axv-notes); color: var(--axv-notes); }
+        .aimax-icon-btn.layout-active { background: color-mix(in srgb, var(--axv-edit) 22%, transparent); border-color: var(--axv-edit); color: var(--axv-edit); }
         /* Move/Resize tool row, rendered in the panel body: present only while
            the sub-mode is on, so text-edit mode keeps its plain hint. */
         .aimax-lay-tools { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
@@ -4845,9 +4851,9 @@ function wrapWithToolbarAndLinkHandler(html: string, title: string, faviconUri: 
             justify-content: center;
             font-size: 13px;
             line-height: 1;
-            background: #1a1a2e;
-            border: 1px solid rgba(255, 149, 0, 0.45);
-            color: #ffb347;
+            background: transparent;
+            border: 1px solid color-mix(in srgb, var(--axv-edit) 45%, transparent);
+            color: var(--axv-edit);
             border-radius: 4px;
             padding: 4px 10px;
             font-size: 11px;
@@ -4857,15 +4863,15 @@ function wrapWithToolbarAndLinkHandler(html: string, title: string, faviconUri: 
             align-items: center;
             gap: 5px;
         }
-        .aimax-lay-tools button:hover:not(:disabled) { background: #2a2a3e; border-color: #ff9500; }
+        .aimax-lay-tools button:hover:not(:disabled) { background: var(--axv-hover-bg); border-color: var(--axv-edit); }
         .aimax-lay-tools button:disabled { opacity: 0.35; cursor: not-allowed; }
         .aimax-lay-tools .lay-key { opacity: 0.55; font-weight: 400; font-size: 10px; }
         .aimax-lay-tools .lay-group { align-self: center; font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; opacity: 0.5; margin-right: 2px; }
         /* Sub-mode toggles: one group per top-level mode, only the active
            group is mounted, and exactly one button in it reads as selected. */
-        .submode-group { display: inline-flex; gap: 3px; padding: 2px; background: rgba(0,0,0,0.25); border-radius: 6px; }
-        .aimax-icon-btn.submode.on { background: rgba(0, 212, 255, 0.20); border-color: #00d4ff; color: #6fe3ff; }
-        .annot-window.edit-mode .aimax-icon-btn.submode.on { background: rgba(255, 149, 0, 0.22); border-color: #ff9500; color: #ffb347; }
+        .submode-group { display: inline-flex; gap: 3px; padding: 2px; background: color-mix(in srgb, var(--axv-fg) 8%, transparent); border-radius: 6px; }
+        .aimax-icon-btn.submode.on { background: color-mix(in srgb, var(--axv-annot) 20%, transparent); border-color: var(--axv-annot); color: var(--axv-annot); }
+        .annot-window.edit-mode .aimax-icon-btn.submode.on { background: color-mix(in srgb, var(--axv-edit) 22%, transparent); border-color: var(--axv-edit); color: var(--axv-edit); }
         /* Action row: what you DO with what you collected, kept out of the header. */
         .annot-actions { padding: 8px 10px 0; }
         .annot-actions:empty { display: none; }
@@ -4880,10 +4886,10 @@ function wrapWithToolbarAndLinkHandler(html: string, title: string, faviconUri: 
             right: 12px;
             width: 380px;
             max-height: 70vh;
-            background: #1e1e1e;
-            border: 1px solid #00d4ff;
+            background: var(--axv-widget-bg);
+            border: 1px solid var(--axv-annot);
             border-radius: 8px;
-            box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+            box-shadow: 0 8px 24px var(--axv-shadow);
             /* Same reason as .aimax-toolbar: single document, chrome on top. */
             z-index: 2147483647;
             flex-direction: column;
@@ -4892,47 +4898,47 @@ function wrapWithToolbarAndLinkHandler(html: string, title: string, faviconUri: 
         }
         .aimax-annot-window.open { display: flex; }
         .aimax-annot-header {
-            background: linear-gradient(90deg, #16213e 0%, #1a1a2e 100%);
+            background: var(--axv-header-bg);
             padding: 8px 12px;
-            color: #cccccc;
+            color: var(--axv-fg);
             font-size: 12px;
             display: flex;
             align-items: center;
             gap: 8px;
-            border-bottom: 1px solid #3c3c3c;
+            border-bottom: 1px solid var(--axv-border);
         }
-        .aimax-annot-header strong { color: #00d4ff; flex: 1; }
+        .aimax-annot-header strong { color: var(--axv-annot); flex: 1; }
         .aimax-annot-header button {
             background: transparent;
-            border: 1px solid #3c3c3c;
-            color: #cccccc;
+            border: 1px solid var(--axv-border);
+            color: var(--axv-icon);
             font-size: 11px;
             cursor: pointer;
             padding: 3px 8px;
             border-radius: 4px;
         }
-        .aimax-annot-header button:hover { color: #00d4ff; border-color: #00d4ff; }
+        .aimax-annot-header button:hover { background: var(--axv-hover-bg); border-color: var(--axv-focus); }
         .aimax-annot-body {
             flex: 1;
             overflow: auto;
             padding: 6px 0;
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
             font-size: 12px;
-            color: #cccccc;
-            background: #14141a;
+            color: var(--axv-fg);
+            background: var(--axv-bg);
         }
         .aimax-annot-row {
             display: flex;
             align-items: center;
             gap: 8px;
             padding: 6px 12px;
-            border-bottom: 1px solid #232330;
+            border-bottom: 1px solid var(--axv-border);
             cursor: default;
         }
-        .aimax-annot-row:hover { background: #1f1f2c; }
+        .aimax-annot-row:hover { background: var(--axv-list-hover-bg); }
         .aimax-annot-num {
-            background: #00d4ff;
-            color: #001018;
+            background: var(--axv-annot);
+            color: var(--axv-on-annot);
             font-weight: bold;
             font-size: 10px;
             width: 18px;
@@ -4950,22 +4956,22 @@ function wrapWithToolbarAndLinkHandler(html: string, title: string, faviconUri: 
             text-overflow: ellipsis;
         }
         .aimax-annot-tag {
-            color: #888;
+            color: var(--axv-fg-muted);
             font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
             font-size: 10px;
             flex-shrink: 0;
         }
         .aimax-annot-x {
-            color: #888;
+            color: var(--axv-fg-muted);
             cursor: pointer;
             padding: 0 4px;
             flex-shrink: 0;
             font-size: 14px;
             line-height: 1;
         }
-        .aimax-annot-x:hover { color: #ff5757; }
+        .aimax-annot-x:hover { color: var(--axv-error); }
         .aimax-annot-empty {
-            color: #666;
+            color: var(--axv-fg-muted);
             font-style: italic;
             padding: 12px;
             text-align: center;
@@ -4974,10 +4980,10 @@ function wrapWithToolbarAndLinkHandler(html: string, title: string, faviconUri: 
             display: none;
             margin: 6px 8px 8px 8px;
             padding: 8px;
-            background: #181825;
-            border: 1px solid #3c3c3c;
+            background: var(--axv-code-bg);
+            border: 1px solid var(--axv-border);
             border-radius: 6px;
-            color: #cdd6f4;
+            color: var(--axv-widget-fg);
             font-size: 11px;
             max-height: 240px;
             overflow-y: auto;
@@ -4988,8 +4994,8 @@ function wrapWithToolbarAndLinkHandler(html: string, title: string, faviconUri: 
         /* Shared icon button (coherent with browser panel annotations + bridge) */
         .aimax-icon-btn {
             background: transparent;
-            border: 1px solid #3c3c3c;
-            color: #00d4ff;
+            border: 1px solid var(--axv-border);
+            color: var(--axv-icon);
             cursor: pointer;
             padding: 3px 6px;
             border-radius: 4px;
@@ -5002,7 +5008,7 @@ function wrapWithToolbarAndLinkHandler(html: string, title: string, faviconUri: 
             line-height: 1;
             font-size: 11px;
         }
-        .aimax-icon-btn:hover { background: #2a2a3e; border-color: #00d4ff; }
+        .aimax-icon-btn:hover { background: var(--axv-hover-bg); border-color: var(--axv-focus); }
         .aimax-icon-btn:disabled { opacity: 0.4; cursor: not-allowed; }
         .aimax-icon-btn .label { font-size: 10px; font-weight: 600; }
         .aimax-icon-btn svg { display: block; }
@@ -5014,7 +5020,7 @@ function wrapWithToolbarAndLinkHandler(html: string, title: string, faviconUri: 
         <img src="${faviconUri}" class="aimax-brand-icon" onclick="goHome()" alt="AI, MAX" title="Home" />
         <button class="aimax-nav-btn" id="backBtn" onclick="goBack()" title="Back" disabled>←</button>
         <button class="aimax-nav-btn" id="fwdBtn" onclick="goForward()" title="Forward" disabled>→</button>
-        <button class="aimax-info-btn" onclick="reload()" title="Reload" style="display:inline-flex;align-items:center;justify-content:center;color:#00d4ff;">
+        <button class="aimax-info-btn" onclick="reload()" title="Reload" style="display:inline-flex;align-items:center;justify-content:center;color:var(--axv-icon);">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3.51-7.13"/><polyline points="21 4 21 10 15 10"/></svg>
         </button>
         <span class="aimax-title">${title}</span>
@@ -5022,10 +5028,10 @@ function wrapWithToolbarAndLinkHandler(html: string, title: string, faviconUri: 
             <span style="font-size: 12px;">[:]</span>
         </button>
         <button class="aimax-toolbar-btn" id="aimaxAnnotBtn" onclick="aimaxToggleAnnot()" title="Toggle annotation mode">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#00d4ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" class="axv-ic-annot" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
         </button>
         <button class="aimax-toolbar-btn" id="aimaxEditBtn" onclick="aimaxToggleEdit()" title="Edit text in place (HTML only)" disabled>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ff9500" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" class="axv-ic-edit" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
         </button>
         <button class="aimax-toolbar-btn" onclick="openTerminal()" title="Open new terminal">
             <span style="font-family: monospace; font-weight: bold;">&gt;_</span>
@@ -5651,14 +5657,14 @@ function openSetupInstructions() {
 // Simplified wrapper for setup page (no navigation needed)
 function wrapSetupPageWithToolbar(html: string, title: string, faviconUri: string): string {
     const toolbarStyles = `
-    <style>
+    <style>${THEME_CSS}
         .aimax-toolbar {
-            background: linear-gradient(90deg, #1a1a2e 0%, #16213e 100%);
+            background: var(--axv-toolbar-bg);
             padding: 8px 12px;
             display: flex;
             align-items: center;
             gap: 8px;
-            border-bottom: 2px solid #00d4ff;
+            border-bottom: 2px solid var(--axv-toolbar-line);
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
             position: fixed;
             top: 0;
@@ -5673,7 +5679,7 @@ function wrapSetupPageWithToolbar(html: string, title: string, faviconUri: strin
             margin-right: 4px;
         }
         .aimax-title {
-            color: #cccccc;
+            color: var(--axv-fg);
             font-size: 12px;
             flex: 1;
         }
