@@ -2,6 +2,17 @@
 
 All notable changes to the AIMax Viewer extension will be documented in this file.
 
+## [Unreleased]
+
+### Fixed: presenter thumbnails, hidden slides and the audience index
+
+- **Thumbnails no longer play the deck to reach their slide.** Each carousel and sorter tile painted slide 1 until the deck's `load` event, jumped to its slide, then glided on for about 700 ms: on a fullpage deck the presenter also sent `aimax-lesson-goto` to every preview, and the Academy bridge answers it with `scrollIntoView({behavior:'smooth'})`. A deck that scrolls is now moved by scrolling only; the goto goes only to a deck that does not scroll, i.e. one that navigates by script. Tiles stay hidden over their placeholder until they sit on their own slide, and land at DOMContentLoaded (2-5x before `load` on a 500 KB deck, measured), then once more at `load`.
+- **Previews show a slide's final state.** Carousel, sorter and the Next panel get a static-frame stylesheet (animations and transitions cut to 0.01ms, no delays, no smooth scroll or snap), GSAP's global timeline is sped up, and `html.aimax-thumb` is set so a deck can finish what CSS cannot reach (D3 transitions, CountUp, step-by-step builds). A slide whose cards fade in on `.in-view` with delays up to 1.6 s is complete in its thumbnail at once. The Current panel stays live: it shows what the room sees.
+- **Hidden slides render as themselves and shift nothing.** The goto carried `index + 1` counted over all sections, while the Academy bridge numbers only those without `data-hidden`: from the first hidden slide on, every tile showed the slide after its own, and on a 31-section deck with 4 hidden ones the last four tiles all showed the closing slide. In the sorter the reveal rule also lost to the deck's own `html.aimax-in-iframe section[data-hidden]` (same `!important`, higher specificity), so a hidden tile showed the next slide too.
+- **Presenter and audience count slides the same way.** The same mismatch put the Current and Next previews one slide ahead per hidden slide already passed, while the audience window (top level, where the bridge is a no-op) stayed on the right one. One `landDeck()` now drives every view, and a goto, when one is sent, is numbered the way that document's bridge numbers: a document that hides its own `data-hidden` sections numbers without them, like the platform's `parsePresenterDeck`. A hidden slide opened on demand is hidden again when you move on; it used to stay revealed, and the deck's own slide counter in the audience ran one ahead from then on.
+- **The carousel no longer runs off on its own.** `scrollIntoView()` called inside a same-origin iframe also scrolls the presenter's carousel, so the strip ended on whichever tile had landed last and the tiles really on screen were evicted as off screen. Previews now scroll their own window.
+- Known limit: on a deck that navigates by script and whose bridge skips hidden slides, a hidden slide cannot be shown in a preview, because that bridge has no such slide.
+
 ## [0.1.37] - 2026-11-05
 
 ### Added — Export as PDF

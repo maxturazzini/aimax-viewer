@@ -963,8 +963,8 @@ let deckBaseUrl = '';
 let channel = null;
 let audienceReady = false;
 // True when the deck declares <meta name="lesson-mode" content="fullpage">, i.e.
-// "don't split me, I own my navigation". Changes how we drive the deck (bridge
-// postMessage instead of scrolling its DOM) — see navFrameToSlide.
+// "don't split me, I own my navigation". Changes how we drive the deck when it
+// does not scroll (bridge postMessage instead of scrolling its DOM): see landDeck.
 let deckFullpage = false;
 
 function startPresenter() {
@@ -1114,6 +1114,34 @@ function visibleCount() {
     return slides.filter(s => !s.hidden).length;
 }
 
+// How a deck's bridge numbers aimax-lesson-goto. The canonical snippet counts every
+// section; the Academy decks with slides di regia drop the data-hidden ones (the
+// same set the platform presenter uses, presenterUtils.parsePresenterDeck) and hide
+// them, inside an iframe only. So a document that hides its own data-hidden
+// sections is taken to number without them. Read once per document, before the
+// presenter injects its own hide rule (after that every hidden section looks
+// hidden), and remembered on the document.
+function bridgeSkipsHidden(doc) {
+    if (doc.__aimaxSkipsHidden === undefined) {
+        let skips = false;
+        if (!doc.getElementById('__sorterHideStyle')) {
+            try {
+                const win = doc.defaultView;
+                skips = Array.prototype.some.call(deckSections(doc), s =>
+                    s.hasAttribute('data-hidden') && win.getComputedStyle(s).display === 'none');
+            } catch (e) {}
+        }
+        doc.__aimaxSkipsHidden = skips;
+    }
+    return doc.__aimaxSkipsHidden;
+}
+
+// 1-based slide number in that document's bridge numbering, or 0 when its bridge
+// has no such slide (a hidden one, for a bridge that skips them).
+function bridgeSlideNumber(doc, index) {
+    return bridgeSkipsHidden(doc) ? visiblePosition(index) : index + 1;
+}
+
 // === LAZY THUMBNAILS ===
 // Every thumbnail is a full load of the entire deck, so one per slide does not
 // scale: a 157-slide deck used to instantiate 157 carousel iframes at once (plus
@@ -1183,9 +1211,10 @@ function makePlaceholder(text) {
 }
 
 // `build(tile)` returns a ready-to-insert iframe; it runs again if the tile was
-// evicted and later scrolls back into view.
-function registerThumb(tile, observer, build) {
-    thumbInfo.set(tile, { build: build });
+// evicted and later scrolls back into view. `land(iframe)` puts the parsed deck on
+// the tile's slide and returns false when it could not.
+function registerThumb(tile, observer, build, land) {
+    thumbInfo.set(tile, { build: build, land: land });
     observer.observe(tile);
 }
 
@@ -1198,9 +1227,31 @@ function mountThumb(tile) {
         const ph = tile.querySelector('.thumb-ph');
         thumbPending.add(iframe);
         thumbLoading++;
+        // Invisible over its placeholder until it sits on its own slide. Before
+        // that it paints slide 1, and every tile used to show the cover first and
+        // then travel to its slide.
+        iframe.style.visibility = 'hidden';
+        const show = () => {
+            iframe.style.visibility = '';
+            if (ph) ph.style.display = 'none';
+        };
+        const land = () => { try { if (info.land && info.land(iframe)) show(); } catch (e) {} };
+        // Land as soon as the deck's DOM is parsed. 'load' also waits for fonts,
+        // images and nested iframes: 2-5x later on a 500 KB deck.
+        const early = setInterval(() => {
+            if (!iframe.isConnected) { clearInterval(early); return; }
+            let doc = null;
+            try { doc = iframe.contentDocument; } catch (e) { clearInterval(early); return; }
+            if (doc && doc.URL !== 'about:blank' && doc.readyState !== 'loading') {
+                clearInterval(early);
+                land();
+            }
+        }, 30);
         const done = () => {
+            clearInterval(early);
             releaseThumbSlot(iframe);
-            if (ph) ph.style.display = 'none';   // placeholder stays under it until painted
+            land();     // again: fonts and images can have moved the sections
+            show();     // even if it could not land: a deck is better than a blank tile
             drainThumbQueue();                   // a slot just freed up
         };
         iframe.addEventListener('load', done);
@@ -1311,11 +1362,11 @@ function buildCarousel() {
             const iframe = document.createElement('iframe');
             iframe.src = deckBaseUrl;
             iframe.style.transform = 'scale(' + (carouselItemWidth / 1280) + ')';
-            iframe.onload = () => {
-                navFrameToSlide(iframe, i, true);
-                try { iframe.contentDocument.documentElement.style.overflow = 'hidden'; } catch(e) {}
-            };
             return iframe;
+        }, (iframe) => {
+            makeFrameStatic(iframe);
+            iframe.contentDocument.documentElement.style.overflow = 'hidden';
+            return navFrameToSlide(iframe, i, true);
         });
     });
 }
@@ -1391,41 +1442,11 @@ function initResize() {
     }
 }
 
+// The audience window is driven exactly like the preview iframes (landDeck), so
+// the two cannot count slides differently.
 function syncAudienceToSlide(domIndex, reveal) {
     if (audienceWin && !audienceWin.closed) {
-        try {
-            const adoc = audienceWin.document;
-            // Ensure hidden sections never show in the audience window
-            if (!adoc.getElementById('__sorterHideStyle')) {
-                const st = adoc.createElement('style');
-                st.id = '__sorterHideStyle';
-                st.textContent = 'section[data-hidden]{display:none !important;}';
-                adoc.head.appendChild(st);
-            }
-            // Best effort for fullpage decks with their own navigation. The
-            // reference bridge no-ops outside an iframe, so the audience window
-            // usually ignores this and the scroll below is what actually moves it.
-            if (deckFullpage) {
-                try { audienceWin.postMessage({ type: 'aimax-lesson-goto', slide: domIndex + 1 }, '*'); } catch(e) {}
-            }
-            const sections = deckSections(adoc);
-            const target = sections[domIndex];
-            if (target) {
-                // Explicitly viewing a hidden slide: reveal it for the audience too
-                // !important, because the hide rule injected above is !important
-                // too and a plain inline style loses to it — the slide would stay
-                // invisible and the view would never move off the previous one.
-                if (reveal && target.hasAttribute('data-hidden')) target.style.setProperty('display', 'flex', 'important');
-                // Disable snap for instant jump, then re-enable
-                adoc.documentElement.style.scrollBehavior = 'auto';
-                adoc.documentElement.style.scrollSnapType = 'none';
-                target.scrollIntoView();
-                setTimeout(() => {
-                    adoc.documentElement.style.scrollBehavior = 'smooth';
-                    adoc.documentElement.style.scrollSnapType = 'y mandatory';
-                }, 50);
-            }
-        } catch(e) {}
+        try { landDeck(audienceWin.document, audienceWin, domIndex, reveal); } catch(e) {}
     }
 }
 
@@ -1476,7 +1497,7 @@ function updatePresenterView() {
     if (nextSlideData) {
         if (!nextFrame.src || !nextFrame.src.includes(deckBaseUrl.split('?')[0])) {
             nextFrame.src = deckBaseUrl;
-            nextFrame.onload = () => { navFrameToSlide(nextFrame, nextIdx); fitIframe(nextFrame); };
+            nextFrame.onload = () => { makeFrameStatic(nextFrame); navFrameToSlide(nextFrame, nextIdx); fitIframe(nextFrame); };
         } else {
             navFrameToSlide(nextFrame, nextIdx);
         }
@@ -1495,89 +1516,114 @@ function updatePresenterView() {
     if (saveBtn) saveBtn.disabled = !!(slides[currentIndex] && slides[currentIndex].savePending);
 }
 
-// Hide any data-hidden sections inside a deck iframe so they never render in
+// Hide any data-hidden sections inside a deck document so they never render in
 // previews or the audience window, even though they remain in the source file.
-function hideHiddenSections(iframe) {
-    try {
-        const doc = iframe.contentDocument;
-        if (doc.getElementById('__sorterHideStyle')) return;
-        const style = doc.createElement('style');
-        style.id = '__sorterHideStyle';
-        style.textContent = 'section[data-hidden]{display:none !important;}';
-        doc.head.appendChild(style);
-    } catch(e) {}
+function ensureHideStyle(doc) {
+    if (doc.getElementById('__sorterHideStyle')) return;
+    const style = doc.createElement('style');
+    style.id = '__sorterHideStyle';
+    style.textContent = 'section[data-hidden]{display:none !important;}';
+    (doc.head || doc.documentElement).appendChild(style);
 }
 
-// Scroll a deck iframe to section `index`. `revealTarget` forces that one
-// section visible even if it carries data-hidden (so carousel thumbnails and
-// explicit clicks on hidden slides still render the slide itself).
-// Point a deck iframe at slide `index`.
+// A deck that scrolls (every section stacked in the page) is moved by scrolling
+// it; one that does not is moved by its own navigation, i.e. its bridge.
+function deckScrolls(doc) {
+    const se = doc.scrollingElement || doc.documentElement;
+    return se.scrollHeight > se.clientHeight + 1;
+}
+
+// Put a deck document on slide `index` (DOM index into deckSections). Used for
+// every view of the deck (carousel, sorter, current and next previews, audience
+// window), so none of them can count slides differently from the others.
 //
-// Legacy decks are scroll-driven, so we reach into their DOM and scroll. A deck
-// carrying <meta name="lesson-mode" content="fullpage"> declares that it owns its
-// own navigation — it may not scroll at all — so we drive it through the
-// aimax-lesson-goto bridge instead (1-based slide number, per the contract).
-function navFrameToSlide(iframe, index, revealTarget) {
-    if (!deckFullpage) {
-        scrollIframeToSlide(iframe, index, revealTarget);
-        return;
+// A fullpage deck used to get both an instant scroll AND an aimax-lesson-goto
+// carrying `index + 1`. The goto was the damage. Its bridge scrolls with
+// behavior:'smooth', so every preview visibly travelled through the slides in
+// between; and the Academy bridge numbers only the slides without data-hidden,
+// so with hidden slides before it a preview landed one slide later per hidden
+// slide, while the audience window (top level, where the bridge is a no-op)
+// sat on the right one. Now a deck that scrolls only gets the scroll, and a deck
+// that does not gets the goto alone, numbered the way its bridge numbers.
+//
+// `revealTarget` shows `index` even when it is hidden (an explicit click), and only
+// for as long as it is the slide on show: a peek at a hidden slide used to leave
+// it revealed for good, so the audience then scrolled through it and the deck's
+// own slide counter ran one ahead of the presenter from there on.
+function landDeck(doc, win, index, revealTarget) {
+    if (!doc) return false;
+    if (deckFullpage) bridgeSkipsHidden(doc);   // before ensureHideStyle: see bridgeSkipsHidden
+    ensureHideStyle(doc);
+    const target = deckSections(doc)[index];
+    doc.querySelectorAll('section[data-hidden]').forEach(s => {
+        if (s !== target && s.__aimaxRevealed) { s.style.removeProperty('display'); s.__aimaxRevealed = false; }
+    });
+    if (!target) return false;
+    if (revealTarget && target.hasAttribute('data-hidden')) {
+        // !important, or the hide rule (also !important) wins and this stays hidden
+        target.style.setProperty('display', 'flex', 'important');
+        target.__aimaxRevealed = true;
     }
-    hideHiddenSections(iframe);
-    let doc = null, target = null;
-    try {
-        doc = iframe.contentDocument;
-        target = deckSections(doc)[index];
-    } catch (e) {}
-    // !important: hideHiddenSections' rule is !important, a plain inline style loses
-    if (target && revealTarget && target.hasAttribute('data-hidden')) target.style.setProperty('display', 'flex', 'important');
-
-    try {
-        iframe.contentWindow.postMessage({ type: 'aimax-lesson-goto', slide: index + 1 }, '*');
-    } catch (e) {}
-
-    // Then land the scroll ourselves, instantly. The bridge scrolls with
-    // behavior:'smooth', which on a snapping deck animates through every slide in
-    // between (ugly in a 106px thumbnail) and can settle one section off. Doing it
-    // first and instantly means the bridge's own scroll finds itself already there.
-    // On a deck that navigates by script rather than scrolling this is a no-op and
-    // the goto above is what moves it — and it keeps a deck that declares the meta
-    // but ships no bridge navigating instead of silently freezing on slide 1.
-    if (target) {
-        try {
-            doc.documentElement.style.scrollBehavior = 'auto';
-            doc.documentElement.style.scrollSnapType = 'none';
-            target.scrollIntoView();
-            setTimeout(() => {
-                doc.documentElement.style.scrollBehavior = 'smooth';
-                doc.documentElement.style.scrollSnapType = 'y mandatory';
-            }, 50);
-        } catch (e) {}
+    const scrolls = deckScrolls(doc);
+    if (deckFullpage && !scrolls) {
+        const n = bridgeSlideNumber(doc, index);
+        if (n > 0) { try { win.postMessage({ type: 'aimax-lesson-goto', slide: n }, '*'); } catch (e) {} }
+        return true;
     }
+    // Disable smooth scroll and snap for an instant jump, then re-enable
+    doc.documentElement.style.scrollBehavior = 'auto';
+    doc.documentElement.style.scrollSnapType = 'none';
+    if (scrolls) {
+        // The deck's own window, not scrollIntoView: called from a same-origin
+        // iframe, that also scrolls every scrollable ancestor in the presenter,
+        // and the carousel ran off to whichever tile had landed last (and the
+        // tiles really on screen got evicted as off screen, and stayed blank).
+        const se = doc.scrollingElement || doc.documentElement;
+        (win || doc.defaultView).scrollTo(se.scrollLeft, target.getBoundingClientRect().top + se.scrollTop);
+    } else {
+        target.scrollIntoView();
+    }
+    setTimeout(() => {
+        doc.documentElement.style.scrollBehavior = 'smooth';
+        doc.documentElement.style.scrollSnapType = 'y mandatory';
+    }, 50);
+    return true;
 }
 
-function scrollIframeToSlide(iframe, index, revealTarget) {
+// Point a deck iframe at slide `index`. Returns false if it could not.
+function navFrameToSlide(iframe, index, revealTarget) {
+    try { return landDeck(iframe.contentDocument, iframe.contentWindow, index, revealTarget); }
+    catch (e) { return false; }
+}
+
+// Thumbnails and the next-slide preview show a slide's FINAL state, without
+// playing it. Decks reveal content with CSS animations and transitions, often
+// started by a class an IntersectionObserver adds when the slide comes on
+// screen (.in-view, .visible), often after delays of a second or two: a tile sat
+// on a half-empty slide until all of it had played. Near-zero durations and no
+// delays end every animation and transition as soon as it starts, on its final
+// keyframe (0.01ms rather than 0: a 0s transition never starts, so a deck
+// waiting for its transitionend would wait forever). GSAP tweens are script, so
+// its global timeline is sped up instead. html.aimax-thumb lets a deck finish
+// what CSS cannot reach (D3 transitions, CountUp, step-by-step builds). The
+// current-slide preview stays live: it shows what the room is seeing.
+const STATIC_FRAME_CSS = '*,*::before,*::after{animation-duration:0.01ms!important;animation-delay:0s!important;'
+    + 'animation-iteration-count:1!important;transition-duration:0.01ms!important;transition-delay:0s!important}'
+    + 'html{scroll-behavior:auto!important;scroll-snap-type:none!important}';
+
+function makeFrameStatic(iframe) {
     try {
-        hideHiddenSections(iframe);
         const doc = iframe.contentDocument;
-        const sections = doc.querySelectorAll('section');
-        const target = sections[index];
-        if (!target) return;
-        let restore = false;
-        if (revealTarget && target.hasAttribute('data-hidden')) {
-            // !important, or the hide rule (also !important) wins and this stays hidden
-            target.style.setProperty('display', 'flex', 'important');
-            restore = true;
+        if (!doc.getElementById('__aimaxStaticFrame')) {
+            const st = doc.createElement('style');
+            st.id = '__aimaxStaticFrame';
+            st.textContent = STATIC_FRAME_CSS;
+            (doc.head || doc.documentElement).appendChild(st);
+            doc.documentElement.classList.add('aimax-thumb');
         }
-        // Disable smooth scroll for instant jump in preview
-        doc.documentElement.style.scrollBehavior = 'auto';
-        doc.documentElement.style.scrollSnapType = 'none';
-        target.scrollIntoView();
-        // Re-enable after a tick
-        setTimeout(() => {
-            doc.documentElement.style.scrollBehavior = 'smooth';
-            doc.documentElement.style.scrollSnapType = 'y mandatory';
-        }, 50);
-    } catch(e) {}
+        const gsap = iframe.contentWindow.gsap;
+        if (gsap && gsap.globalTimeline) gsap.globalTimeline.timeScale(1000);
+    } catch (e) {}
 }
 
 function nextSlide() {
@@ -1996,31 +2042,16 @@ function buildSorterTiles() {
             const iframe = document.createElement('iframe');
             iframe.src = deckBaseUrl;
             iframe.style.transform = 'scale(' + (sorterTileWidth / 1280) + ')';
-            iframe.onload = () => {
-                try {
-                    const doc = iframe.contentDocument;
-                    doc.documentElement.style.overflow = 'hidden';
-                    // Reveal hidden sections so even a hidden slide renders its own content
-                    const st = doc.createElement('style');
-                    st.textContent = 'section[data-hidden]{display:flex !important;}';
-                    doc.head.appendChild(st);
-                    const secs = doc.querySelectorAll('section');
-                    if (secs[secIdx]) {
-                        doc.documentElement.style.scrollBehavior = 'auto';
-                        doc.documentElement.style.scrollSnapType = 'none';
-                        secs[secIdx].scrollIntoView();
-                    }
-                } catch(e) {}
-                // openSorter refuses to open unless the raw sections and the
-                // presented slides line up 1:1, so secIdx is also the bridge's
-                // slide number: a fullpage deck that navigates by script instead
-                // of scrolling lands on the right slide too, rather than showing
-                // slide 1 in every tile.
-                if (deckFullpage) {
-                    try { iframe.contentWindow.postMessage({ type: 'aimax-lesson-goto', slide: secIdx + 1 }, '*'); } catch(e) {}
-                }
-            };
             return iframe;
+        }, (iframe) => {
+            makeFrameStatic(iframe);
+            iframe.contentDocument.documentElement.style.overflow = 'hidden';
+            // openSorter refuses to open unless the raw sections and the presented
+            // slides line up 1:1, so secIdx is the presenter's index too. Revealed,
+            // so a hidden slide renders its own content: the old reveal rule lost
+            // to the decks' own html.aimax-in-iframe section[data-hidden] (same
+            // !important, higher specificity) and the tile showed the next slide.
+            return navFrameToSlide(iframe, secIdx, true);
         });
     });
 }
